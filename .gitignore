@@ -1,2 +1,4 @@
 dags/__pycache__/
+logs/
+plugins/
 dev-airflow-standalone-server.pem
