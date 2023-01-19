@@ -1,2 +1,2 @@
 dags/__pycache__/
-dev-standalone-airflow-key-pair.pem
+dev-airflow-standalone-server.pem
