@@ -3,7 +3,7 @@ import logging
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 logging.basicConfig(level=logging.ERROR)
-logger = logging.getLogger(__name__)from airflow.operators.bash import BashOperator
+logger = logging.getLogger(__name__)
 
 default_args = {
     'owner': 'adedayo.okubanjo',
