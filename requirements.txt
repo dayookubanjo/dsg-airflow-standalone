@@ -1,4 +1,5 @@
 apache-airflow-providers-snowflake 
+apache-airflow-providers-amazon
 apache-airflow-providers-common-sql 
 asn1crypto 
 cryptography 
@@ -13,4 +14,4 @@ snowflake-connector-python
 snowflake-sqlalchemy 
 SQLAlchemy 
 sqlparse 
-typing-extensions 
+typing-extensions
