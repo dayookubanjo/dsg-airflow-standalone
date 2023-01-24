@@ -15,3 +15,9 @@ snowflake-sqlalchemy
 SQLAlchemy 
 sqlparse 
 typing-extensions
+boto3
+watchtower
+jsonpath_ng
+pandas
+mypy-boto3-rds
+mypy-boto3-appflow
