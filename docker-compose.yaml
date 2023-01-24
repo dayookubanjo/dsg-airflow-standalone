@@ -119,7 +119,7 @@ services:
       driver: "awslogs"
       options:
         awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone"
+        awslogs-group: "/airflow/standalone/WebServer"
         awslogs-create-group: "false"
 
   airflow-scheduler:
@@ -164,6 +164,13 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/Worker"
+        awslogs-create-group: "false"
+
   airflow-triggerer:
     <<: *airflow-common
     command: triggerer
@@ -177,6 +184,13 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/triggerer"
+        awslogs-create-group: "false"
 
   airflow-init:
     <<: *airflow-common
@@ -255,6 +269,13 @@ services:
     user: "0:0"
     volumes:
       - .:/sources
+
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/init"
+        awslogs-create-group: "false"
 
   airflow-cli:
     <<: *airflow-common
