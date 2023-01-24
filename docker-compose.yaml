@@ -276,5 +276,13 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  myservice:
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone"
+        awslogs-create-group: "false"
+
 volumes:
   postgres-db-volume:
