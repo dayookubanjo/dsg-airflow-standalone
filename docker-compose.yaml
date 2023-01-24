@@ -115,6 +115,13 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone"
+        awslogs-create-group: "false"
+
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
@@ -274,15 +281,7 @@ services:
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
-        condition: service_completed_successfully
-
-  myservice:
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone"
-        awslogs-create-group: "false"
+        condition: service_completed_successfully 
 
 volumes:
   postgres-db-volume:
