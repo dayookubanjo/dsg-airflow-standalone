@@ -136,6 +136,13 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/scheduler"
+        awslogs-create-group: "false"
+
   airflow-worker:
     <<: *airflow-common
     command: celery worker
