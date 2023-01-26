@@ -3,3 +3,4 @@ logs/
 plugins/
 dev-airflow-standalone-server.pem
 intent-dev-ec2-key.pem
+.DS_Store
