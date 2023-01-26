@@ -383,7 +383,7 @@ with dag:
   scraper_start_exec = BashOperator(
     task_id = "launch-instance",
     depends_on_past=False,
-    bash_command="aws ec2 run-instances --count 1 --launch-template LaunchTemplateId=lt-0d1ab6c33588b5145"
+    bash_command="aws ec2 run-instances --count 1 --launch-template LaunchTemplateId=lt-0d1ab6c33588b5145 --region us-east-2"
     ) 
   
   #clear the scraper output cache 
