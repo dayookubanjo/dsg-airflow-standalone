@@ -120,7 +120,7 @@ services:
       options:
         awslogs-region: "us-east-2"
         awslogs-group: "/airflow/standalone/WebServer"
-        awslogs-create-group: "false"
+        awslogs-create-group: "true"
 
   airflow-scheduler:
     <<: *airflow-common
@@ -141,7 +141,7 @@ services:
       options:
         awslogs-region: "us-east-2"
         awslogs-group: "/airflow/standalone/scheduler"
-        awslogs-create-group: "false"
+        awslogs-create-group: "true"
 
   airflow-worker:
     <<: *airflow-common
@@ -169,7 +169,7 @@ services:
       options:
         awslogs-region: "us-east-2"
         awslogs-group: "/airflow/standalone/Worker"
-        awslogs-create-group: "false"
+        awslogs-create-group: "true"
 
   airflow-triggerer:
     <<: *airflow-common
@@ -190,7 +190,7 @@ services:
       options:
         awslogs-region: "us-east-2"
         awslogs-group: "/airflow/standalone/triggerer"
-        awslogs-create-group: "false"
+        awslogs-create-group: "true"
 
   airflow-init:
     <<: *airflow-common
@@ -275,7 +275,7 @@ services:
       options:
         awslogs-region: "us-east-2"
         awslogs-group: "/airflow/standalone/init"
-        awslogs-create-group: "false"
+        awslogs-create-group: "true"
 
   airflow-cli:
     <<: *airflow-common
