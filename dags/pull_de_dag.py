@@ -13,7 +13,7 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
-from airflow.providers.amazon.aws.sensors.s3_key import S3KeySizeSensor 
+from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
     
@@ -125,7 +125,7 @@ with DAG(
     
     launch_instance_exec.doc = "This task launches an EC2 instance according to the DE-related launch template. Uses the default version of the launch template."
 
-    check_data_ingestion_status = S3KeySizeSensor(
+    check_data_ingestion_status = S3KeySensor(
         task_id='check_data_ingestion_status',
         bucket_name='dev-intent-digital-element',
         bucket_key='flat-files/de_out.txt.gz',
