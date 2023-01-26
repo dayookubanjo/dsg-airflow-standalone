@@ -120,7 +120,7 @@ with DAG(
     launch_instance_exec = BashOperator(
         task_id = "launch-instance",
         depends_on_past=False,
-        bash_command="aws ec2 run-instances --count 1 --launch-template LaunchTemplateId=lt-016744221119eb24c"
+        bash_command="aws ec2 run-instances --count 1 --launch-template LaunchTemplateId=lt-016744221119eb24c "
     )
     
     launch_instance_exec.doc = "This task launches an EC2 instance according to the DE-related launch template. Uses the default version of the launch template."
