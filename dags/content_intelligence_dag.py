@@ -195,7 +195,7 @@ title_model_input_cache_query = ["""
   using (
     select
       result:url::varchar as page_url,
-      any_value(result:title::varchar) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),50) as title
+      dev_aiml.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),25) as title
     from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE" a
     left join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" b
     on a.result:url::varchar = b.page_url
@@ -291,7 +291,7 @@ merge into dev_aiml.taxonomy_classifier.input_cache t
 using
   (select
       result:url::varchar as page_url,
-      any_value(result:title::varchar) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),1000) as title_plus_content
+      dev_aiml.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),1000) as title_plus_content
     from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE" a
     left join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" b
     on a.result:url::varchar = b.page_url
