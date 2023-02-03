@@ -3,6 +3,7 @@ from datetime import date, datetime
 import logging
 import requests
 import snowflake.connector
+import time
 
 #--------- aws imports -------
 import boto3
@@ -71,7 +72,8 @@ def ip_api_search():
     # Send the request and save the response for each row in the table
     for row in rows:
         ip_address = row[0]
-
+        time.sleep(0.01)
+        
         # print("row:", row)
         # print("row[0]:", row[0])
         # print('data:', data)
