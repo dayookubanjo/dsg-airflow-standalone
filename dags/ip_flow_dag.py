@@ -2,6 +2,7 @@
 from datetime import date, datetime
 import logging
 import requests
+from requests.exceptions import ConnectionError
 import snowflake.connector
 import time
 
@@ -81,13 +82,16 @@ def ip_api_search():
         # print("row[0]:", row[0])
         # print('data:', data)
 
-        response = requests.get(f"https://api.ipflow.com/v1.0/search/ipaddress/{ip_address}", headers=headers)
+        try:
+            response = requests.get(f"https://api.ipflow.com/v1.0/search/ipaddress/{ip_address}", headers=headers)
 
-        # print('response code:', response.status_code)
+            # print('response code:', response.status_code)
 
-        # Insert the response data into the table
-        cs.execute("INSERT INTO DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA (USER_IP, LAST_RESPONSE_CODE, LAST_QUERY_DATE, API_RESPONSE) VALUES (%s, %s, %s, %s)", 
-        [ip_address, response.status_code, today, response.text])
+            # Insert the response data into the table
+            cs.execute("INSERT INTO DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA (USER_IP, LAST_RESPONSE_CODE, LAST_QUERY_DATE, API_RESPONSE) VALUES (%s, %s, %s, %s)", 
+            [ip_address, response.status_code, today, response.text])
+        except ConnectionError as err:
+            time.sleep(10)
 
     ctx.commit()
     cs.close()
