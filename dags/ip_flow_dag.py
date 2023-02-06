@@ -44,6 +44,9 @@ def on_success_callback(context):
 
 #---- Python definitions ------
 
+def end_success():
+  logger.info("DAG Ended Successfully.")
+
 def ip_api_search():
     ctx = snowflake.connector.connect(
         user='DEV_AIRFLOW',
@@ -97,17 +100,6 @@ def ip_api_search():
 snowflake_insert_input_data_query = [
     """insert into DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_INPUT_DATA
 with mapped_ips as (
-select DISTINCT BD.USER_IP   
-FROM DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY AS BD 
-INNER JOIN "DEV_DIGITAL_ELEMENT"."MAPPINGS"."IP_RANGE_MAPPINGS_FILTERED" AS DE 
-ON SPLIT_PART(BD.USER_IP, '.', 1)   
-|| LPAD( SPLIT_PART(BD.USER_IP, '.', 2) , 3, 0)   
-|| LPAD( SPLIT_PART(BD.USER_IP, '.', 3) , 3, 0)   
-|| LPAD( SPLIT_PART(BD.USER_IP, '.', 4) , 3, 0) 
-BETWEEN IP_RANGE_START_NUMERIC AND IP_RANGE_END_NUMERIC 
-
-UNION 
-
 select  DISTINCT BD.USER_IP 
  
 FROM DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY AS BD 
@@ -350,4 +342,10 @@ with DAG(
         snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
     )
 
-    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> snowflake_merge_output_staging_exec >> snowflake_merge_output_mappings_exec >> snowflake_merge_devmart_domain_exec >> snowflake_normalize_loc_staging_exec >> snowflake_merge_devmart_location_exec >> snowflake_cleanup_tables_exec
+    end_success_exec = PythonOperator(
+        task_id= "end_success",
+        python_callable = end_success,
+        on_success_callback = on_success_callback
+        )
+
+    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> snowflake_merge_output_staging_exec >> snowflake_merge_output_mappings_exec >> snowflake_merge_devmart_domain_exec >> snowflake_normalize_loc_staging_exec >> snowflake_merge_devmart_location_exec >> snowflake_cleanup_tables_exec >> end_success_exec
