@@ -67,21 +67,30 @@ WHEN NOT MATCHED THEN
           );"""
     ]
 
-# merge_devmart_domain_query = [
-#     """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as target_table
-# USING FIVE_BY_FIVE_DEMO.PRODUCTS.IP_COMPANY_2_6_0 as source_table
-# ON (source_table.IP_ADDRESS = target_table.IP)
-# WHEN MATCHED THEN
-#     UPDATE SET 
-      
-#     target_table.DATE_UPDATED = current_date(),
-#     target_table.NORMALIZED_COMPANY_DOMAIN =   source_table.COMPANY_DOMAIN
-# WHEN NOT MATCHED THEN
-#     INSERT (IP,DATE_UPDATED,NORMALIZED_COMPANY_DOMAIN)
-#     VALUES(source_table.IP_ADDRESS,
-#           current_date(),
-#           source_table.COMPANY_DOMAIN);"""
-#     ]
+create_devmart_domain_query = [
+    """create or replace table "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN" as
+with most_recent as(
+    select distinct
+    ip,
+    first_value(normalized_company_domain) over (partition by ip, source order by date desc) as latest_domain,
+    source,
+    source_confidence
+from "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN_OBSERVATIONS"
+),
+rolled_obs as (
+    select
+    ip,
+    latest_domain,
+    array_agg(distinct source) as sources,
+    iff(array_size(sources)>1, 1, sum((case source
+        when 'DIGITAL ELEMENT' then 0.3
+        when 'IP FLOW' then 0.5
+        when 'FIVE BY FIVE' then 0.9
+    else 0.0 end)*ifnull(source_confidence, 1))) as score
+  from most_recent
+  group by 1,2
+);"""
+    ]
 
 with DAG(
     'Five-By-Five-IP-to-Domain-Merge',
@@ -107,11 +116,11 @@ with DAG(
         snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
     )
 
-    # merge_devmart_domain_exec = SnowflakeOperator(
-    #     task_id= "merge_devmart_domain",
-    #     sql= merge_devmart_domain_query,
-    #     snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
-    # )
+    create_devmart_domain_exec = SnowflakeOperator(
+        task_id= "create_devmart_domain",
+        sql= create_devmart_domain_query,
+        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+    )
 
     end_success_exec = PythonOperator(
         task_id= "end_success",
@@ -119,4 +128,4 @@ with DAG(
         on_success_callback = on_success_callback
         ) 
 
-    merge_devmart_domain_observations_exec >> end_success_exec
+    merge_devmart_domain_observations_exec >> create_devmart_domain_exec >> end_success_exec
