@@ -236,7 +236,13 @@ rolled_obs as (
     else 0.0 end)*ifnull(source_confidence, 1))) as score
   from most_recent
   group by 1,2
-);"""
+) 
+
+select distinct
+    ip,
+    first_value(latest_domain) over (partition by ip order by score desc) as normalized_company_domain,
+    first_value(score) over (partition by ip order by score desc) as score
+from rolled_obs;"""
     ]
 
 snowflake_normalize_loc_staging_query = [
