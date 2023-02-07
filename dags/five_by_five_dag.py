@@ -84,7 +84,7 @@ WHEN NOT MATCHED THEN
 #     ]
 
 with DAG(
-    'Five By Five IP to Domain Merge',
+    'Five-By-Five-IP-to-Domain-Merge',
     default_args={
         'depends_on_past' : False,
         'retries' : 0,

@@ -1,5 +1,5 @@
 #------ standard python imports ----
-from datetime import date, datetime
+from datetime import datetime
 import logging 
 
 #--------- aws imports -------
