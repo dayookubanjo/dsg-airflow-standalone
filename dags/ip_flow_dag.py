@@ -190,6 +190,30 @@ WHEN NOT MATCHED THEN
           source_table.API_RESPONSE);"""
     ]
 
+merge_devmart_domain_observations_query = [
+    """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS as target_table
+USING 
+
+(SELECT DISTINCT USER_IP,LAST_RESPONSE_CODE,LAST_QUERY_DATE, ANY_VALUE(API_RESPONSE) AS API_RESPONSE, 'IP FLOW' AS SOURCE FROM  DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
+GROUP BY USER_IP,LAST_RESPONSE_CODE,LAST_QUERY_DATE) as source_table
+
+ON (source_table.USER_IP = target_table.IP AND source_table.SOURCE = target_table.SOURCE)
+WHEN MATCHED THEN
+    UPDATE SET 
+      
+    target_table.DATE = source_table.LAST_QUERY_DATE,
+    target_table.NORMALIZED_COMPANY_DOMAIN =   SPLIT_PART(PARSE_JSON(source_table.API_RESPONSE):website::string, '.', 2) || '.' || SPLIT_PART(PARSE_JSON(source_table.API_RESPONSE):website::string, '.', 3),
+    target_table.SOURCE_CONFIDENCE =    NULL   
+WHEN NOT MATCHED THEN
+    INSERT (IP, NORMALIZED_COMPANY_DOMAIN, SOURCE, SOURCE_CONFIDENCE, DATE )
+    VALUES(source_table.USER_IP,
+           SPLIT_PART(PARSE_JSON(source_table.API_RESPONSE):website::string, '.', 2) || '.' || SPLIT_PART(PARSE_JSON(source_table.API_RESPONSE):website::string, '.', 3),
+           'IP FLOW',
+            NULL   ,
+          source_table.LAST_QUERY_DATE
+          );"""
+    ]
+
 snowflake_merge_devmart_domain_query = [
     """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as target_table
 USING DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA as source_table
@@ -322,6 +346,12 @@ with DAG(
         snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
     )   
 
+    merge_devmart_domain_observations_exec = SnowflakeOperator(
+        task_id= "merge_devmart_domain_observations",
+        sql= merge_devmart_domain_observations_query,
+        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+    ) 
+
     snowflake_merge_devmart_domain_exec = SnowflakeOperator(
         task_id= "merge_devmart_domain",
         sql= snowflake_merge_devmart_domain_query,
@@ -352,4 +382,4 @@ with DAG(
         on_success_callback = on_success_callback
         )
 
-    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> snowflake_merge_output_staging_exec >> snowflake_merge_output_mappings_exec >> snowflake_merge_devmart_domain_exec >> snowflake_normalize_loc_staging_exec >> snowflake_merge_devmart_location_exec >> snowflake_cleanup_tables_exec >> end_success_exec
+    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> snowflake_merge_output_staging_exec >> snowflake_merge_output_mappings_exec >> merge_devmart_domain_observations_exec >> snowflake_merge_devmart_domain_exec >> snowflake_normalize_loc_staging_exec >> snowflake_merge_devmart_location_exec >> snowflake_cleanup_tables_exec >> end_success_exec
