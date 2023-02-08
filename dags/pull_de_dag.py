@@ -82,7 +82,7 @@ select
     trim(upper(pulseplus_region)) as normalized_region_code,
     dev_digital_element.public.normalize_city_de(pulseplus_city) as normalized_city_name,
     pulseplus_metro_code as metro_code,
-    try_to_number(pulseplus_postal_code) as normalized_zip,
+    pulseplus_postal_code as normalized_zip,
     pulseplus_country_conf as country_confidence,
     pulseplus_region_conf as region_confidence,
     pulseplus_city_conf as city_confidence,
