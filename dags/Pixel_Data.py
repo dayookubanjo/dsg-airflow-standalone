@@ -38,15 +38,29 @@ copy_query = ["copy into dev_pixel.raw_data.raw_pixel_data from @dev_pixel.raw_d
 merge_insert = ["""
 merge into dev_pixel.activity.user_activity t
 using (
+with test_pixel as
+(select
+    pixel_record:"userId"::varchar as client_id,
+    pixel_record:"ip"::varchar as ip,
+    split_part (ip,',',-1) as user_ip,
+    date(dev_pixel.public.date_normalizer(pixel_record:"date"),'dd-mm-yyyy') as date,
+    pixel_record:"userAgent"::varchar as user_agent,
+    pixel_record:"thirdPartyId"::varchar as site_url,
+    count(*) as pageviews 
+from DEV_PIXEL.RAW_DATA.RAW_PIXEL_DATA
+group by 1,2,3,4,5,6
+UNION  
 select
     pixel_record:"userId"::varchar as client_id,
-    pixel_record:"ip"::varchar as user_ip,
+    pixel_record:"ip"::varchar as ip,
+    split_part (ip,',',1) as user_ip,
     date(dev_pixel.public.date_normalizer(pixel_record:"date"),'dd-mm-yyyy') as date,
     pixel_record:"userAgent"::varchar as user_agent,
     pixel_record:"thirdPartyId"::varchar as site_url,
     count(*) as pageviews
-from DEV_PIXEL.RAW_DATA.RAW_PIXEL_DATA
-group by 1,2,3,4,5) s
+from DEV_PIXEL.RAW_DATA.RAW_PIXEL_DATA 
+group by 1,2,3,4,5,6)
+select client_id,user_ip,date,user_agent,site_url,pageviews from test_pixel) s
 on t.user_ip = s.user_ip 
 and t.date = s.date
 and t.user_agent = s.user_agent
