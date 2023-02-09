@@ -263,7 +263,6 @@ with dag:
 
   clear_raw_data_cache_exec = SnowflakeOperator(
     task_id= "clear_raw_data_cache",
-    on_success_callback=on_success_callback,
     sql= clear_raw_data_cache,
     snowflake_conn_id= "Airflow-Dev_Transform-connection",
     )
@@ -306,6 +305,7 @@ with dag:
   
   delete_from_company_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_company_activity_cache",
+    on_success_callback=on_success_callback,
     sql= delete_from_company_activity_cache,
     snowflake_conn_id= "Airflow-Dev_Transform-connection",
     )
