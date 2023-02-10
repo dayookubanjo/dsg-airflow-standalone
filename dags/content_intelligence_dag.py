@@ -203,7 +203,7 @@ title_model_input_cache_query = ["""
     and result:statuscode::varchar = '200'
     and date_classified is null
     group by 1
-    having len(title)>1
+    having len(trim(title))>1
   ) s
   on s.page_url = t.page_url
   when not matched then insert
@@ -299,7 +299,7 @@ using
     and result:statuscode::varchar = '200'
     and date_classified is null
     group by 1
-    having len(title_plus_content)>1) s
+    having len(trim(title_plus_content))>1) s
 on t.page_url = s.page_url
 when not matched then insert
 (page_url, title_plus_content, date_inserted)
