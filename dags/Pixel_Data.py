@@ -142,7 +142,7 @@ merge_insert_company_activity_cache = ["""
 set user_activity_watermark = (select ifnull(max(date), '2022-10-13') from dev_pixel.activity.company_activity);
 """,
 """
-set user_activity_max_date = (select dateadd(day,1, $user_activity_watermark));
+set user_activity_max_date = (select dateadd(day,15, $user_activity_watermark));
 """,
 """
 merge into "DEV_PIXEL"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" t using 
