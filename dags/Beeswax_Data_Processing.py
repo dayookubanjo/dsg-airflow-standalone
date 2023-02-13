@@ -3,9 +3,7 @@ from datetime import datetime
 from airflow import DAG
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
-from airflow.operators.bash import BashOperator
 from airflow.operators.python_operator import PythonOperator
-from airflow.contrib.hooks.snowflake_hook import SnowflakeHook
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
@@ -39,9 +37,7 @@ def on_success_callback(context):
     
 SNOWFLAKE_CONN = "Airflow-Dev_Transform-connection"
 
-WBI_SIZE_TRANSFORMS = '30'
-WBI_SIZE_SCRAPER = '3'
-WBI_SIZE_ML = '3'
+WBI_SIZE_TRANSFORMS = '180'
 
 
 dag = DAG('Beeswax_Channel', start_date = datetime(2022, 12, 7), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
