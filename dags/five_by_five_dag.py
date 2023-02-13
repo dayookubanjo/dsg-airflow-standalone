@@ -107,7 +107,7 @@ with DAG(
         'on_success_callback': None
     },
     description = 'Merges Five By Five data with Devmart IP to Domain table',
-    schedule_interval = '0 0 * * SAT',
+    schedule_interval = '@weekly', # '0 0 * * SAT'
     start_date = datetime(2023, 2, 5),
     catchup=False,
     tags=['Five By Five', 'Intent'], 
