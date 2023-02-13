@@ -123,7 +123,7 @@ with DAG(
         'on_success_callback': None
     },
     description = 'Ingests LeadSift data from s3 into Snowflake',
-    schedule_interval = '0 0 * * SAT',
+    schedule_interval = '@weekly',
     start_date = datetime(2023, 2, 5),
     catchup=False,
     tags=['LeadSift', 'Intent'], 
