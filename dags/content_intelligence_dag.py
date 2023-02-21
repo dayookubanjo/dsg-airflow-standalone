@@ -42,7 +42,7 @@ CONTENT_MODEL_STAGE_NAME = "dev_aiml.taxonomy_classifier.prod_input"
 CONTENT_MODEL_CACHE_TABLE_NAME = "dev_aiml.taxonomy_classifier.input_cache"
 CONTENT_MODEL_SELECT_COLS = "page_url, title_plus_content"
 CONTENT_MODEL_BATCH_LIMIT = 1000000
-CONTENT_MODEL_MAX_FILE_SIZE = 50000000
+CONTENT_MODEL_MAX_FILE_SIZE = 15000000
 
 
 #-----SNS Failure notification----
