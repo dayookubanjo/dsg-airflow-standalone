@@ -181,7 +181,7 @@ def scoring_input_cache_with_join(lookback_date):
     query = f"""
     create or replace table dev_aiml.intent_scoring.input_cache as (
   with subset as (
-  select * from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING" t
+  select t.* from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING" t
   join (select distinct 
                 normalized_company_domain,
                 normalized_country_code,
