@@ -473,7 +473,10 @@ using (
         activity.*,
         taxo.intent_topics,
         context.context as context_output,
-        title.topics as title_output
+        title.topics as title_output,
+        title.url_type,
+        title.activity_type,
+        title.information_type
     from "DEV_BIDSTREAM"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" activity
     join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
     on activity.page_url = taxo.page_url
@@ -503,7 +506,10 @@ when not matched then insert
  unique_ips,
  intent_topics,
  context_output,
- title_output)
+ title_output,
+ url_type,
+ activity_type,
+ information_type)
  values
  (s.page_url, 
  s.publisher_domain_normalized,
@@ -519,7 +525,10 @@ when not matched then insert
  s.unique_ips,
  s.intent_topics,
  s.context_output,
- s.title_output)
+ s.title_output,
+ s.url_type,
+ s.activity_type,
+ s.information_type)
  when matched then update set
  publisher_domain_normalized = s.publisher_domain_normalized,
  pageviews = s.pageviews,
@@ -527,7 +536,10 @@ when not matched then insert
  unique_ips = s.unique_ips,
  intent_topics = s.intent_topics,
  context_output = s.context_output,
- title_output = s.title_output;
+ title_output = s.title_output,
+ url_type = s.url_type,
+ activity_type = s.activity_type,
+ information_type = s.information_type;
 """]
 
 
