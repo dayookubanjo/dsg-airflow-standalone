@@ -62,7 +62,7 @@ def get_min_score_date(snow_hook):
     global_min = datetime.strptime(SCORE_DATE_GLOBAL_MIN, date_format).date()
     min_cache_result = snow_hook.get_first("select min(date) from DEV_BIDSTREAM.ACTIVITY.PRESCORING_CACHE")
     print("query result: ",min_cache_result)
-    min_cache_date = min_cache_result['MIN(DATE)']
+    min_cache_date = min_cache_result[0]
     if min_cache_date is None:
         return global_min
     min_score_date = max([global_min, min_cache_date])
