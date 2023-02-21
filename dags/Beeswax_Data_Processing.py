@@ -532,6 +532,7 @@ when not matched then insert
  when matched then update set
  publisher_domain_normalized = s.publisher_domain_normalized,
  pageviews = s.pageviews,
+ weighted_pageviews =  s.weighted_pageviews,
  unique_devices = s.unique_devices,
  unique_ips = s.unique_ips,
  intent_topics = s.intent_topics,
