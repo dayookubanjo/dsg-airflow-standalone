@@ -472,6 +472,10 @@ clear_bidstream_prescoring_cache_query = ["""
 truncate table dev_bidstream.activity.prescoring_cache;
 """]
 
+clear_scoring_output_cache_query = ["""
+truncate table "DEV_AIML"."INTENT_SCORING"."OUTPUT_CACHE";
+"""]
+
 bidstream_prescoring_cache_to_cumulative_query = ["""
 merge into "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING" t
  using "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING_CACHE" s
@@ -565,6 +569,12 @@ with dag:
     sql= clear_bidstream_prescoring_cache_query,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
+    # --- Clear scoring output cache --- #
+    clear_scoring_output_cache_exec = SnowflakeOperator(
+    task_id= "clear_scoring_output_cache",
+    sql= clear_scoring_output_cache_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
     # --- End Success --- #
     end_success_exec = PythonOperator(
     task_id= "end_success",
@@ -573,4 +583,4 @@ with dag:
     )
 
     # --- DAG FLOW ---#
-    bidstream_prescoring_cache_to_cumulative_exec >> scoring_input_cache_exec >> intent_scoring_exec >> historical_merge_exec >> clear_bidstream_prescoring_cache_exec >> end_success_exec
+    bidstream_prescoring_cache_to_cumulative_exec >> scoring_input_cache_exec >> intent_scoring_exec >> historical_merge_exec >> clear_bidstream_prescoring_cache_exec >> clear_scoring_output_cache_exec >> end_success_exec
