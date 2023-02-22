@@ -451,19 +451,20 @@ using dev_aiml.intent_scoring.output_cache s
   when not matched then insert
   (score_date, normalized_company_domain, parent_category, category, topic, 
    normalized_country_code, normalized_region_code, normalized_city_name, normalized_zip,
-   volume, recency, variety, context, trend, intent_score
+   volume, recency, variety, context, week_over_week_trend, month_over_month_trend, intent_score
   )
   values
   (s.score_date, s.normalized_company_domain, s.parent_category, s.category, s.topic, 
    s.normalized_country_code, s.normalized_region_code, s.normalized_city_name, s.normalized_zip,
-   s.volume, s.recency, s.variety, s.context, s.trend, s.intent_score
+   s.volume, s.recency, s.variety, s.context, s.week_over_week_trend, s.month_over_month_trend, s.intent_score
   )
   when matched then update set
   volume = s.volume,
   recency = s.recency,
   variety = s.variety,
   context = s.context,
-  trend = s.trend,
+  week_over_week_trend = s.week_over_week_trend,
+  month_over_month_trend = s.month_over_month_trend,
   intent_score = s.intent_score;
 """]
 
