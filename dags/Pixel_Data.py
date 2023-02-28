@@ -204,17 +204,20 @@ values(S.PAGE_URL,S.PUBLISHER_DOMAIN_NORMALIZED,S.NORMALIZED_COMPANY_DOMAIN,S.DA
 #-----Pre-scoring-----
 merge_insert_prescoring_cache=["""merge into dev_pixel.activity.prescoring_cache t
 using (
-select a.*,
-       b.intent_topics,
-       c.context as context_output,
-       d.topics as title_output
-    from "DEV_PIXEL"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" a
-    join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" b
-    on a.page_url = b.page_url
-    join "DEV_AIML"."CONTEXT_CLASSIFIER"."OUTPUT" c
-    on a.page_url = c.page_url
-    join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" d
-    on a.page_url = d.page_url)s
+select activity.*,
+        taxo.intent_topics,
+        context.context as context_output,
+        title.topics as title_output,
+        title.url_type,
+        title.activity_type,
+        title.information_type
+    from "DEV_PIXEL"."ACTIVITY"."COMPANY_ACTIVITY" activity
+    join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
+    on activity.page_url = taxo.page_url
+    join "DEV_AIML"."CONTEXT_CLASSIFIER"."OUTPUT" context
+    on activity.page_url = context.page_url
+    join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" title
+    on activity.page_url = title.page_url)s
 on t.page_url=s.page_url
 and t.normalized_company_domain=s.normalized_company_domain
 and t.date=s.date
@@ -223,18 +226,21 @@ and equal_null(t.normalized_region_code,s.normalized_region_code)=true
 and equal_null(t.normalized_city_name,s.normalized_city_name)=true
 and equal_null(t.normalized_zip,s.normalized_zip)=true
 when matched then update set
+publisher_domain_normalized = s.publisher_domain_normalized,
 pageviews = s.pageviews,
-weighted_pageviews=s.weighted_pageviews,
-publisher_domain_normalized=s.publisher_domain_normalized,
+weighted_pageviews =  s.weighted_pageviews,
 unique_devices = s.unique_devices,
 unique_ips = s.unique_ips,
 intent_topics = s.intent_topics,
 context_output = s.context_output,
-title_output = s.title_output
+title_output = s.title_output,
+url_type = s.url_type,
+activity_type = s.activity_type,
+information_type = s.information_type
 when not matched then insert
-(page_url,publisher_domain_normalized,normalized_company_domain,date,normalized_country_code,normalized_region_code,normalized_city_name,normalized_zip,pageviews,weighted_pageviews,unique_devices,unique_ips,intent_topics,context_output,title_output)
+(page_url,publisher_domain_normalized,normalized_company_domain,date,normalized_country_code,normalized_region_code,normalized_city_name,normalized_zip,pageviews,weighted_pageviews,unique_devices,unique_ips,intent_topics,context_output,title_output,url_type,activity_type,information_type)
  values
-(s.page_url,s.publisher_domain_normalized,s.normalized_company_domain,s.date,s.normalized_country_code,s.normalized_region_code,s.normalized_city_name,s.normalized_zip,s.pageviews,s.weighted_pageviews,s.unique_devices,s.unique_ips,s.intent_topics,s.context_output,s.title_output)
+(s.page_url,s.publisher_domain_normalized,s.normalized_company_domain,s.date,s.normalized_country_code,s.normalized_region_code,s.normalized_city_name,s.normalized_zip,s.pageviews,s.weighted_pageviews,s.unique_devices,s.unique_ips,s.intent_topics,s.context_output,s.title_output,s.url_type,s.activity_type,s.information_type)
 ;"""]
 
 #-----Delete from Company_activity_cache-----
