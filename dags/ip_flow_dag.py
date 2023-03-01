@@ -156,7 +156,10 @@ where last_response_code = 200;"""
 
 snowflake_merge_output_staging_query = [
     """MERGE INTO DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_DATA as target_table
-USING DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA as source_table
+USING (select user_ip, min(last_response_code) as last_response_code,
+       max(last_query_date) as last_query_date, any_value(api_response) as api_response 
+       from DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA 
+      group by user_ip) as source_table
 ON (source_table.USER_IP = target_table.USER_IP)
 WHEN MATCHED THEN
     UPDATE SET 
@@ -174,7 +177,10 @@ WHEN NOT MATCHED THEN
 
 snowflake_merge_output_mappings_query = [
     """MERGE INTO DEV_IP_FLOW.MAPPINGS.IP_FLOW_API_MAPPINGS as target_table
-USING DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA as source_table
+USING (select user_ip, min(last_response_code) as last_response_code,
+       max(last_query_date) as last_query_date, any_value(api_response) as api_response 
+       from DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
+      group by user_ip) as source_table
 ON (source_table.USER_IP = target_table.USER_IP)
 WHEN MATCHED THEN
     UPDATE SET 
@@ -194,8 +200,10 @@ merge_devmart_domain_observations_query = [
     """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS as target_table
 USING 
 
-(SELECT DISTINCT USER_IP,LAST_RESPONSE_CODE,LAST_QUERY_DATE, ANY_VALUE(API_RESPONSE) AS API_RESPONSE, 'IP FLOW' AS SOURCE FROM  DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
-GROUP BY USER_IP,LAST_RESPONSE_CODE,LAST_QUERY_DATE) as source_table
+(SELECT DISTINCT USER_IP,MIN(LAST_RESPONSE_CODE) AS LAST_RESPONSE_CODE,
+ MAX(LAST_QUERY_DATE) AS LAST_QUERY_DATE, ANY_VALUE(API_RESPONSE) AS API_RESPONSE, 'IP FLOW' AS SOURCE 
+ FROM  DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
+GROUP BY USER_IP) as source_table
 
 ON (source_table.USER_IP = target_table.IP AND source_table.SOURCE = target_table.SOURCE)
 WHEN MATCHED THEN
@@ -284,7 +292,12 @@ from normalized_region;"""
 
 snowflake_merge_devmart_location_query = [
     """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_LOCATION as target_table
-USING DEV_IP_FLOW.STAGING.NORMALIZED_LOCATION as source_table
+USING ( SELECT IP, MAX(DATE_UPDATED) AS DATE_UPDATED, ANY_VALUE(NORMALIZED_COUNTRY_CODE) AS NORMALIZED_COUNTRY_CODE, 
+       ANY_VALUE(NORMALIZED_REGION_CODE) AS NORMALIZED_REGION_CODE, 
+       ANY_VALUE(NORMALIZED_CITY_NAME) AS NORMALIZED_CITY_NAME, 
+       ANY_VALUE(NORMALIZED_ZIP) AS NORMALIZED_ZIP
+       FROM DEV_IP_FLOW.STAGING.NORMALIZED_LOCATION 
+       GROUP BY IP ) as source_table
 ON (source_table.IP = target_table.IP)
 WHEN MATCHED THEN
     UPDATE SET 
