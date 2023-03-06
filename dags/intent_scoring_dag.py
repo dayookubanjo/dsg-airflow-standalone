@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 # ---Variable definition--- #
-SNS_ARN = arn:aws:sns:us-east-2:698085094823:Intent_Scoring
+SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Intent_Scoring'
 DAG_NAME = 'Intent_Scoring'
 TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
 SCORE_DATE_GLOBAL_MIN = '2023-02-01'
