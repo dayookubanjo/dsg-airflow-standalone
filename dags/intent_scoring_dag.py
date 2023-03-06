@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 # ---Variable definition--- #
-SNS_ARN = ... #TODO: change to scoring SNS arn
+SNS_ARN = arn:aws:sns:us-east-2:698085094823:Intent_Scoring
 DAG_NAME = 'Intent_Scoring'
 TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
 SCORE_DATE_GLOBAL_MIN = '2023-02-01'
@@ -24,7 +24,6 @@ def end_success():
   logger.info("DAG Ended Successfully.")
 
 def on_failure_callback(context):
-    """
     op = SnsPublishOperator(
         task_id="dag_failure"
         ,target_arn=SNS_ARN
@@ -32,13 +31,9 @@ def on_failure_callback(context):
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
-    """
-    pass
 
     
 def on_success_callback(context):
-    pass
-    """
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
@@ -46,7 +41,6 @@ def on_success_callback(context):
         ,message=f"{DAG_NAME} has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
-    """
     
 TRANSFORM_CONN = "Airflow-Dev_Transform-connection"
 
