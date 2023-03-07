@@ -44,7 +44,7 @@ def on_success_callback(context):
     
 TRANSFORM_CONN = "Airflow-Dev_Transform-connection"
 
-dag = DAG(DAG_NAME, start_date = datetime(2022, 12, 7), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
+dag = DAG(DAG_NAME, start_date = datetime(2022, 12, 7), schedule_interval = '@weekly', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'depends_on_past' : False,'retries' : 0,'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
 # -- PYTHON FUNCTIONS ---- #
@@ -66,26 +66,28 @@ def scoring_input_cache():
     date_format = '%Y-%m-%d'
     snow_hook = SnowflakeHook(snowflake_conn_id=TRANSFORM_CONNECTION)
     #get min date from caches
-    min_score_date = get_min_score_date(snow_hook)
+    #min_score_date = get_min_score_date(snow_hook) #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
+    min_score_date = datetime.today().date() #COMMENT THIS OUT WHEN SWITCHING BACK TO DAILY UPDATES
     #set lookback date
     lookback_date = min_score_date - timedelta(days = 120)
     lookback_date_str = lookback_date.strftime(date_format)
     #create input cache
-    if DOW == 6:
-        snow_hook.run(scoring_input_cache_without_join(quote_wrap(lookback_date_str)))
-    else:
-        snow_hook.run(scoring_input_cache_with_join(quote_wrap(lookback_date_str)))
+    #if DOW == 6: #UNCOMMENT THIS AND THE ELSE BLOCK WHEN SWITCHING BACK TO DAILY UPDATES
+    snow_hook.run(scoring_input_cache_without_join(quote_wrap(lookback_date_str)))
+    #else:
+        #snow_hook.run(scoring_input_cache_with_join(quote_wrap(lookback_date_str)))
 
 def intent_scoring_backfill():
     date_format = '%Y-%m-%d'
     snow_hook = SnowflakeHook(snowflake_conn_id=TRANSFORM_CONNECTION)
-    min_score_date = get_min_score_date(snow_hook)
-    print(f"Min date to begin scoring: {min_score_date}")
+    #min_score_date = get_min_score_date(snow_hook) #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
+    #print(f"Min date to begin scoring: {min_score_date}") #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
     max_date = datetime.today().date()
-    print(f"Max date to score to: {max_date}")
+    #print(f"Max date to score to: {max_date}") #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
     #create list of dates to re-score from min_cache_date to current date
-    date_diff = max_date - min_score_date
-    date_list = [max_date - timedelta(days = x) for x in range(date_diff.days)]
+    #date_diff = max_date - min_score_date #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
+    #date_list = [max_date - timedelta(days = x) for x in range(date_diff.days)] #UNCOMMENT WHEN SWITCHING BACK TO DAILY UPDATES
+    date_list = [max_date] #COMMENT THIS OUT WHEN SWITCHING BACK TO DAILY UPDATES
     print(f"dates to score: {date_list}")
     #for each date in date list, score and merge into output cache
     for score_date in date_list:
