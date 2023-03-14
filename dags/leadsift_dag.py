@@ -113,6 +113,23 @@ cleanup_tables_query = [
     """TRUNCATE TABLE DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES_CACHE;""" 
 ]
 
+prescoring_query = [
+    """
+    create or replace table dev_leadsift.activity.prescoring as
+    select
+        file_date as date,
+        ds_parent_category as parent_category,
+        ds_category as category,
+        ds_topic as topic,
+        dev_datamart.public.domain_normalizer(domain) as normalized_company_domain,
+        max(score) as leadsift_score
+    from DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES a
+    join "DEV_LEADSIFT"."PUBLIC"."TOPIC_MAPPINGS" b
+    on a.entity_trigger = b.leadsift_category
+    group by 1,2,3,4,5;
+    """
+]
+
 #----- begin DAG definition -------
 with DAG(
     'LeadSift-Ingestion',
@@ -148,7 +165,13 @@ with DAG(
         task_id= "cleanup_tables",
         sql= cleanup_tables_query,
         snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
-    )   
+    )
+
+    prescoring_exec = SnowflakeOperator(
+        task_id= "prescoring",
+        sql= prescoring_query,
+        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+    )    
 
     end_success_exec = PythonOperator(
         task_id= "end_success",
@@ -156,4 +179,4 @@ with DAG(
         on_success_callback = on_success_callback
         ) 
 
-    load_data_from_s3_exec >> merge_cache_to_output_exec >> cleanup_tables_exec >> end_success_exec
+    load_data_from_s3_exec >> merge_cache_to_output_exec >> cleanup_tables_exec >> prescoring_exec >> end_success_exec
