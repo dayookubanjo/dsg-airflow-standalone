@@ -87,6 +87,13 @@ services:
       interval: 5s
       retries: 5
     restart: always
+    
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/Postgres"
+        awslogs-create-group: "true"
 
   redis:
     image: redis:latest
@@ -98,6 +105,13 @@ services:
       timeout: 30s
       retries: 50
     restart: always
+    
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: "us-east-2"
+        awslogs-group: "/airflow/standalone/Redis"
+        awslogs-create-group: "true"
 
   airflow-webserver:
     <<: *airflow-common
