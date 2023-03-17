@@ -98,12 +98,12 @@ def intent_scoring_backfill():
 # ---- SNOWFLAKE QUERIES ----
 def scoring_input_cache_without_join(lookback_date):
     query = f"""
-    create or replace table dev_aiml.intent_scoring.input_cache as (
+    create or replace table dev_aiml.intent_scoring.input_cache as
   with subset as (
   select * from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING"
   where (title_output:"BUSINESS">=0.8 or title_output:"BUSINESS NEWS">=0.4 or title_output:"SCIENCE TECH NEWS">=0.55)
-  and date >= date({lookback_date})
-  and date < current_date),
+  and date >= date({lookback_date}) 
+  and date < current_date), 
     
     bidstream as (
       select
@@ -141,10 +141,100 @@ def scoring_input_cache_without_join(lookback_date):
         -- table definition
         from subset t,
         lateral flatten(input=>t.intent_topics) f
-        group by 1,2,3,4,5,6,7,8,9 )
+        group by 1,2,3,4,5,6,7,8,9 ),
+        
+        pixel as (
+      select
+        -- rollup cols
+        t.normalized_company_domain,
+        f.value:"parentCategory"::varchar as parent_category,
+        f.value:"category"::varchar as category,
+        f.value:"topic"::varchar as topic,
+        t.normalized_country_code,
+        t.normalized_region_code,
+        t.normalized_city_name,
+        t.normalized_zip,
+        t.date,
+        -- feature cols
+        sum(t.pageviews) as pageviews,
+        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
+        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
+        avg(case activity_type
+              when 'downloading' then 100
+              when 'reading' then 85
+              when 'visiting' then 50
+              when 'executing' then 10
+              when 'contacting' then 10
+              else 5 end) as activity_type_score,
+        avg(case information_type
+              when 'informational' then 100
+              when 'transactional' then 75
+              when 'navigational' then 25
+              else 5 end) as information_type_score,
+        sum(t.context_output:"review/comparison") as review_pageviews,
+        count(distinct t.page_url) as unique_pages,
+        count(distinct t.publisher_domain_normalized) as unique_pubs,
+        sum(t.unique_devices) as unique_devices,
+        sum(t.unique_ips) as unique_ips
+        -- table definition
+        from "DEV_PIXEL"."ACTIVITY"."PRESCORING" t,
+        lateral flatten(input=>t.intent_topics) f
+        where date >= date({lookback_date})
+        and date < current_date 
+        group by 1,2,3,4,5,6,7,8,9),
 
     -- other sources would go here
-
+    combined_sources as (
+      select
+        coalesce(b.normalized_company_domain, p.normalized_company_domain, l.normalized_company_domain, e.normalized_company_domain) as normalized_company_domain,
+        coalesce(b.parent_category, p.parent_category, l.parent_category, e.parent_category) as parent_category,
+        coalesce(b.category, p.category, l.category, e.category) as category,
+        coalesce(b.topic, p.topic, l.topic, e.topic) as topic,
+        coalesce(b.normalized_country_code, p.normalized_country_code) as normalized_country_code,
+        coalesce(b.normalized_region_code, p.normalized_region_code) as normalized_region_code,
+        coalesce(b.normalized_city_name, p.normalized_city_name) as normalized_city_name,
+        coalesce(b.normalized_zip, p.normalized_zip) as normalized_zip,
+        coalesce(b.date, p.date, l.date, e.date) as date,
+        ifnull(b.pageviews,0) + ifnull(p.pageviews,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as pageviews,
+        ifnull(b.weighted_pageviews,0) + 10*ifnull(p.weighted_pageviews,0) + ifnull(iff(l.leadsift_score=0,50,l.leadsift_score)/100,0) + ifnull(e.weighted_clicks,0)*10 + 5*ifnull(e.weighted_opens,0) as weighted_pageviews,
+        ifnull(b.avg_page_relevance,1.0) as avg_page_relevance,
+        ifnull(b.activity_type_score,100) as activity_type_score,
+        ifnull(b.information_type_score,100) as information_type_score,
+        ifnull(b.review_pageviews,0) as review_pageviews,
+        ifnull(b.unique_pages,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pages,
+        ifnull(b.unique_pubs,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pubs
+    from bidstream b
+    --join to email
+    full outer join (select * from "DEV_EMAIL_CAMPAIGNS"."ACTIVITY"."PRESCORING"
+                     where date >= date({lookback_date})
+                     and date < current_date) e
+    on b.normalized_company_domain = e.normalized_company_domain
+    and b.parent_category = e.parent_category
+    and b.category = e.category
+    and b.topic = e.topic
+    and b.date = e.date
+    --join to leadisft
+    full outer join (select * from "DEV_LEADSIFT"."ACTIVITY"."PRESCORING"
+                     where date >= date({lookback_date})
+                     and date < current_date) l
+    on b.normalized_company_domain = l.normalized_company_domain
+    and b.parent_category = l.parent_category
+    and b.category = l.category
+    and b.topic = l.topic
+    and b.date = l.date
+    --join to pixel
+    full outer join pixel p
+    on b.normalized_company_domain = p.normalized_company_domain
+    and b.normalized_country_code = p.normalized_country_code
+    and b.normalized_region_code = p.normalized_region_code
+    and b.normalized_city_name = p.normalized_city_name
+    and b.normalized_zip = p.normalized_zip
+    and b.parent_category = p.parent_category
+    and b.category = p.category
+    and b.topic = p.topic
+    and b.date = p.date
+    
+    )
     -- main select statement
     select
       *,
@@ -158,7 +248,7 @@ def scoring_input_cache_without_join(lookback_date):
                                                     normalized_zip
                                    order by date asc
                                    rows between unbounded preceding and current row) as moving_avg_weighted_pageviews,
-      stddev(weighted_pageviews) over (partition by normalized_company_domain,
+      ifnull(stddev(weighted_pageviews) over (partition by normalized_company_domain,
                                                    parent_category,
                                                     category,
                                                     topic,
@@ -167,8 +257,8 @@ def scoring_input_cache_without_join(lookback_date):
                                                     normalized_city_name,
                                                     normalized_zip
                                    order by date asc
-                                   rows between unbounded preceding and current row) as moving_stddev_weighted_pageviews
-    from bidstream);
+                                   rows between unbounded preceding and current row),0) as moving_stddev_weighted_pageviews
+    from combined_sources;
 
     """
     return query
@@ -468,6 +558,10 @@ clear_bidstream_prescoring_cache_query = ["""
 truncate table dev_bidstream.activity.prescoring_cache;
 """]
 
+clear_pixel_prescoring_cache_query = ["""
+truncate table dev_pixel.activity.prescoring_cache;
+"""]
+
 clear_scoring_output_cache_query = ["""
 truncate table "DEV_AIML"."INTENT_SCORING"."OUTPUT_CACHE";
 """]
@@ -533,11 +627,78 @@ when not matched then insert
  information_type = s.information_type;
 """]
 
+pixel_prescoring_cache_to_cumulative_query = ["""
+merge into "DEV_PIXEL"."ACTIVITY"."PRESCORING" t
+ using "DEV_PIXEL"."ACTIVITY"."PRESCORING_CACHE" s
+ on s.page_url = t.page_url
+and s.normalized_company_domain = t.normalized_company_domain
+and s.date = t.date
+and s.normalized_country_code = t.normalized_country_code
+and s.normalized_region_code = t.normalized_region_code
+and s.normalized_city_name = t.normalized_city_name
+and s.normalized_zip = t.normalized_zip
+when not matched then insert
+(page_url, 
+ publisher_domain_normalized,
+ normalized_company_domain,
+ date,
+ normalized_country_code,
+ normalized_region_code,
+ normalized_city_name,
+ normalized_zip,
+ pageviews,
+ weighted_pageviews,
+ unique_devices,
+ unique_ips,
+ intent_topics,
+ context_output,
+ title_output,
+ url_type,
+ activity_type,
+ information_type)
+ values
+ (s.page_url, 
+ s.publisher_domain_normalized,
+ s.normalized_company_domain,
+ s.date,
+ s.normalized_country_code,
+ s.normalized_region_code,
+ s.normalized_city_name,
+ s.normalized_zip,
+ s.pageviews,
+ s.weighted_pageviews,
+ s.unique_devices,
+ s.unique_ips,
+ s.intent_topics,
+ s.context_output,
+ s.title_output,
+ s.url_type,
+ s.activity_type,
+ s.information_type)
+ when matched then update set
+ publisher_domain_normalized = s.publisher_domain_normalized,
+ pageviews = s.pageviews,
+ unique_devices = s.unique_devices,
+ unique_ips = s.unique_ips,
+ intent_topics = s.intent_topics,
+ context_output = s.context_output,
+ title_output = s.title_output,
+ url_type = s.url_type,
+ activity_type = s.activity_type,
+ information_type = s.information_type;
+"""]
+
 with dag:
     # --- merge prescoring input caches into cumulative tables --- #
     bidstream_prescoring_cache_to_cumulative_exec = SnowflakeOperator(
     task_id= "bidstream_prescoring_cache_to_cumulative",
     sql= bidstream_prescoring_cache_to_cumulative_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
+    pixel_prescoring_cache_to_cumulative_exec = SnowflakeOperator(
+    task_id= "pixel_prescoring_cache_to_cumulative",
+    sql= pixel_prescoring_cache_to_cumulative_query,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
     # --- Gather prescoring tables/Populate scoring input cache --- #
@@ -565,6 +726,12 @@ with dag:
     sql= clear_bidstream_prescoring_cache_query,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
+
+    clear_pixel_prescoring_cache_exec = SnowflakeOperator(
+    task_id= "clear_pixel_prescoring_cache",
+    sql= clear_pixel_prescoring_cache_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
     # --- Clear scoring output cache --- #
     clear_scoring_output_cache_exec = SnowflakeOperator(
     task_id= "clear_scoring_output_cache",
@@ -579,4 +746,4 @@ with dag:
     )
 
     # --- DAG FLOW ---#
-    bidstream_prescoring_cache_to_cumulative_exec >> scoring_input_cache_exec >> intent_scoring_exec >> historical_merge_exec >> clear_bidstream_prescoring_cache_exec >> clear_scoring_output_cache_exec >> end_success_exec
+    [pixel_prescoring_cache_to_cumulative_exec,bidstream_prescoring_cache_to_cumulative_exec] >> scoring_input_cache_exec >> intent_scoring_exec >> historical_merge_exec >> [clear_bidstream_prescoring_cache_exec,clear_pixel_prescoring_cache_exec] >> clear_scoring_output_cache_exec >> end_success_exec
