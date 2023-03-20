@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
 PIXEL_DATABASE = 'dev_pixel'
 DATAMART_DATABASE = 'dev_datamart'
+AIML_DATABASE = 'dev_aiml'
 
 #-----SNS Failure notification----
 
@@ -106,11 +107,11 @@ values (s.page_url,s.page_url_hash,s.PUBLISHER_DOMAIN_NORMALIZED,s.first_seen,s.
 
 #-----Merge into Webscraper input-----
 merge_insert_WebScraper_input_cache = [f"""
-merge into "DEV_AIML"."WEB_SCRAPER"."INPUT_CACHE" t
+merge into {AIML_DATABASE}.web_scraper.input_cache t
 using (select distinct a.page_url,a.last_seen from {PIXEL_DATABASE}.content.unique_urls a
-       left join dev_aiml.web_scraper.results b
+       left join {AIML_DATABASE}.web_scraper.results b
        on a.page_url = b.page_url where last_scraped is null
-       and publisher_domain_normalized not in (select distinct publisher_domain_normalized from DEV_DATAMART.FILTERS_SUPPRESSIONS.HIGH_VOLUME_BAD_PUBS_SUPPRESS))s
+       and publisher_domain_normalized not in (select distinct publisher_domain_normalized from {DATAMART_DATABASE}.filters_suppressions.high_volume_bad_pubs_suppress))s
 on t.page_url = s.page_url 
 when not matched then insert
 (page_url, date_inserted)
@@ -121,7 +122,7 @@ date_inserted = current_date;
 """]
 
 #-----Ip Mappings-----
-merge_insert_Digital_element_observation = [f"""merge into dev_datamart.entity_mappings.ip_to_company_domain_observations t
+merge_insert_Digital_element_observation = [f"""merge into {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain_observations t
 using (
    select distinct
         pw.user_ip as ip,
@@ -152,7 +153,7 @@ set user_activity_max_date = (select dateadd(day,15, $user_activity_watermark));
 f"""
 merge into {PIXEL_DATABASE}.activity.company_activity_cache t using 
 (select a.site_url as page_url,
-       dev_datamart.public.domain_normalizer(ifnull(Parse_url(a.SITE_URL,1):host::varchar,'')) as PUBLISHER_DOMAIN_NORMALIZED,
+       {DATAMART_DATABASE}.public.domain_normalizer(ifnull(Parse_url(a.SITE_URL,1):host::varchar,'')) as PUBLISHER_DOMAIN_NORMALIZED,
        b.normalized_company_domain,
        a.date,
        c.normalized_country_code, 
@@ -164,9 +165,9 @@ merge into {PIXEL_DATABASE}.activity.company_activity_cache t using
        count(distinct USER_AGENT) as unique_devices,
        count(distinct user_ip) as unique_ips 
        from {PIXEL_DATABASE}.activity.user_activity a
-       join dev_datamart.entity_mappings.ip_to_company_domain b
+       join {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain b
        on a.user_ip = b.ip
-       join dev_datamart.entity_mappings.ip_to_location c
+       join {DATAMART_DATABASE}.entity_mappings.ip_to_location c
        on a.user_ip = c.ip
        where a.date >= $user_activity_watermark and a.date <= $user_activity_max_date
        group by 1,2,3,4,5,6,7,8)s
@@ -217,11 +218,11 @@ select activity.*,
         title.activity_type,
         title.information_type
     from {PIXEL_DATABASE}.activity.company_activity activity
-    join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
+    join {AIML_DATABASE}.taxonomy_classifier.output taxo
     on activity.page_url = taxo.page_url
-    join "DEV_AIML"."CONTEXT_CLASSIFIER"."OUTPUT" context
+    join {AIML_DATABASE}.context_classifier.output context
     on activity.page_url = context.page_url
-    join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" title
+    join {AIML_DATABASE}.title_classifier.outpur title
     on activity.page_url = title.page_url)s
 on t.page_url=s.page_url
 and t.normalized_company_domain=s.normalized_company_domain
