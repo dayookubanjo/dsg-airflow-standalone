@@ -11,6 +11,9 @@ SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
 PIXEL_DATABASE = 'dev_pixel'
 DATAMART_DATABASE = 'dev_datamart'
 AIML_DATABASE = 'dev_aiml'
+DE_DATABASE = 'dev_digital_element'
+LOAD_CONNECTION = "Airflow-Dev_load-connection"
+TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
 
 #-----SNS Failure notification----
 
@@ -129,8 +132,8 @@ using (
         de.normalized_company_domain,
         de.date_updated
     from {PIXEL_DATABASE}.activity.user_activity pw
-    join dev_digital_element.mappings.ip_range_mappings_filtered de
-    on dev_digital_element.public.ip_to_number(pw.user_ip) between de.ip_range_start_numeric and de.ip_range_end_numeric
+    join {DE_DATABASE}.mappings.ip_range_mappings_filtered de
+    on {DE_DATABASE}.public.ip_to_number(pw.user_ip) between de.ip_range_start_numeric and de.ip_range_end_numeric
     where ip is not null and len(ip) > 0 and ip not ilike '%:%'
     and normalized_company_domain is not null and len(normalized_company_domain)>1) s
 on s.ip = t.ip
@@ -264,61 +267,61 @@ with dag:
   copy_query_exec = SnowflakeOperator(
     task_id= "load_from_s3",
     sql= copy_query,
-    snowflake_conn_id= "Airflow-Dev_load-connection",
+    snowflake_conn_id= LOAD_CONNECTION ,
     )
   
   merge_into_user_activity_exec = SnowflakeOperator(
     task_id= "merge_into_user_activity",
     sql= merge_insert_user_activity,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
   clear_raw_data_cache_exec = SnowflakeOperator(
     task_id= "clear_raw_data_cache",
     sql= clear_raw_data_cache,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
   merge_into_unique_urls_exec = SnowflakeOperator(
     task_id= "merge_into_unique_urls",
     sql= merge_insert_unique_urls,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   
   merge_into_WebScraper_input_cache_exec = SnowflakeOperator(
     task_id= "merge_into_WebScraper_input_cache",
     sql= merge_insert_WebScraper_input_cache,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   
   merge_into_Digital_element_observation_exec = SnowflakeOperator(
     task_id= "merge_into_Digital_element_observation",
     sql= merge_insert_Digital_element_observation,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
     
   merge_into_company_activity_cache_exec = SnowflakeOperator(
     task_id= "merge_into_company_activity_cache",
     sql= merge_insert_company_activity_cache,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   
   merge_into_company_activity_exec = SnowflakeOperator(
     task_id= "merge_into_company_activity",
     sql= merge_insert_company_activity,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   
   merge_into_prescoring_cache_exec = SnowflakeOperator(
     task_id= "merge_into_prescoring_cache",
     sql= merge_insert_prescoring_cache,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   
   delete_from_company_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_company_activity_cache",
     on_success_callback=on_success_callback,
     sql= delete_from_company_activity_cache,
-    snowflake_conn_id= "Airflow-Dev_Transform-connection",
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
   copy_query_exec >> merge_into_user_activity_exec  >> clear_raw_data_cache_exec >> merge_into_unique_urls_exec >> merge_into_WebScraper_input_cache_exec >> merge_into_Digital_element_observation_exec >> merge_into_company_activity_cache_exec >> merge_into_company_activity_exec >> merge_into_prescoring_cache_exec >> delete_from_company_activity_cache_exec
