@@ -6,12 +6,16 @@ from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
+#-----Global Definitions----
+SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
+DATABASE = 'dev_pixel'
+
 #-----SNS Failure notification----
 
 def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:Pixel_data_processing"
+        ,target_arn=SNS_ARN
         ,subject="DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
@@ -22,7 +26,7 @@ def on_failure_callback(context):
 def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:Pixel_data_processing"
+        ,target_arn=SNS_ARN
         ,subject="DAG Success"
         ,message=f"Pixel Data Processing has succeeded, run_id: {context['run_id']}"
     )
@@ -34,7 +38,7 @@ dag = DAG('Pixel_Data_Processing', start_date = datetime(2022, 10, 29), schedule
 #-----Snowflake queries----
 
 #-----Copy Raw data from S3----
-copy_query = ["copy into dev_pixel.raw_data.raw_pixel_data from @dev_pixel.raw_data.raw_pixel_data purge=True;"]
+copy_query = [f"""copy into {DATABASE}.raw_data.raw_pixel_data from @{DATABASE}.raw_data.raw_pixel_data purge=True;"""]
 
 #-----User activity----
 merge_insert_user_activity = ["""
