@@ -222,7 +222,7 @@ select activity.*,
     on activity.page_url = taxo.page_url
     join {AIML_DATABASE}.context_classifier.output context
     on activity.page_url = context.page_url
-    join {AIML_DATABASE}.title_classifier.outpur title
+    join {AIML_DATABASE}.title_classifier.output title
     on activity.page_url = title.page_url)s
 on t.page_url=s.page_url
 and t.normalized_company_domain=s.normalized_company_domain
