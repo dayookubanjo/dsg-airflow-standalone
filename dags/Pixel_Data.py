@@ -7,10 +7,10 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 #-----Global Definitions----
-#SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
-#PIXEL_DATABASE = 'dev_pixel'
-#DATAMART_DATABASE = 'dev_datamart'
-#AIML_DATABASE = 'dev_aiml'
+SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
+PIXEL_DATABASE = 'dev_pixel'
+DATAMART_DATABASE = 'dev_datamart'
+AIML_DATABASE = 'dev_aiml'
 
 #-----SNS Failure notification----
 
