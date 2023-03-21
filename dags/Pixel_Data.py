@@ -22,7 +22,7 @@ def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
         ,target_arn=SNS_ARN
-        ,subject="DAG FAILED"
+        ,subject="PIXEL DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -33,7 +33,7 @@ def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="DAG Success"
+        ,subject="PIXEL DAG Success"
         ,message=f"Pixel Data Processing has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
