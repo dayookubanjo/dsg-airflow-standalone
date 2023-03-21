@@ -15,6 +15,7 @@ AIML_DATABASE = 'dev_aiml'
 DE_DATABASE = 'dev_digital_element'
 LOAD_CONNECTION = "Airflow-Dev_load-connection"
 TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
+SNS_ARN=Variable.get("SNS_ARN")
 
 #-----SNS Failure notification----
 
