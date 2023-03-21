@@ -7,15 +7,14 @@ from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-#-----Global Definitions----
-#SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
-PIXEL_DATABASE = 'dev_pixel'
-DATAMART_DATABASE = 'dev_datamart'
-AIML_DATABASE = 'dev_aiml'
-DE_DATABASE = 'dev_digital_element'
-LOAD_CONNECTION = "Airflow-Dev_load-connection"
-TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
+#-----Importing Variables----
 SNS_ARN=Variable.get("SNS_ARN")
+PIXEL_DATABASE = Variable.get("PIXEL_DATABASE")
+DATAMART_DATABASE = Variable.get("DATAMART_DATABASE")
+AIML_DATABASE = Variable.get("AIML_DATABASE")
+DE_DATABASE = Variable.get("DE_DATABASE")
+LOAD_CONNECTION = Variable.get("LOAD_CONNECTION")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
 
 #-----SNS Failure notification----
 
