@@ -3,11 +3,12 @@ from datetime import datetime
 from airflow import DAG
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 #-----Global Definitions----
-SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
+#SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Pixel_data_processing'
 PIXEL_DATABASE = 'dev_pixel'
 DATAMART_DATABASE = 'dev_datamart'
 AIML_DATABASE = 'dev_aiml'
