@@ -6,14 +6,19 @@ from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.contrib.hooks.snowflake_hook import SnowflakeHook
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# ---Variable definition--- #
-SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Intent_Scoring'
-DAG_NAME = 'Email_Campaigns'
-TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
+#-----Importing Variables----
+SNS_ARN=Variable.get("SNS_ARN")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+EMAIL_CAMPAIGNS_DATABASE = Variable.get("EMAIL_CAMPAIGNS_DATABASE")
+DATAMART_DATABASE = Variable.get("DATAMART_DATABASE")
+AIML_DATABASE = Variable.get("AIML_DATABASE")
 
+# ---Variable definition--- #
+DAG_NAME = 'Email_Campaigns'
 dt = datetime.now()
 date_time = dt.strftime("%m%d%Y%H:%M:%S")
 DOW = dt.weekday()
@@ -26,7 +31,7 @@ def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
         ,target_arn=SNS_ARN
-        ,subject="DAG FAILED: "+DAG_NAME
+        ,subject= "EMAIL_CAMPAIGNS DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -36,26 +41,24 @@ def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="DAG Success"
+        ,subject="EMAIL_CAMPAIGNS DAG SUCCESS"
         ,message=f"{DAG_NAME} has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
-    
-TRANSFORM_CONN = "Airflow-Dev_Transform-connection"
 
 dag = DAG(DAG_NAME, start_date = datetime(2022, 12, 7), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'depends_on_past' : False,'retries' : 0,'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
 #---- SNOWFLAKE QUERIES ----#
-company_clicks_query = ["""
-create or replace table dev_email_campaigns.activity.company_clicks as
+company_clicks_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.activity.company_clicks as
 select
     cam_id,
-    dev_datamart.public.domain_normalizer(domain) as normalized_company_domain,
+    {DATAMART_DATABASE}.public.domain_normalizer(domain) as normalized_company_domain,
     date(time) as date,
     split_part(link,'?email',1) as page_url, --index is 1-based
     count(*) as frequency
-from  DEV_EMAIL_CAMPAIGNS.RAW_DATA.CLICKS
+from  {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.CLICKS
 where cam_id is not null
 and normalized_company_domain is not null
 and date is not null
@@ -63,43 +66,43 @@ and page_url is not null
 group by 1,2,3,4;
 """]
 
-company_opens_query = ["""
-create or replace table dev_email_campaigns.activity.company_opens as
+company_opens_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.activity.company_opens as
 select
     cam_id,
-    dev_datamart.public.domain_normalizer(domain) as normalized_company_domain,
+    {DATAMART_DATABASE}.public.domain_normalizer(domain) as normalized_company_domain,
     date(time) as date,
     count(*) as frequency
-from  DEV_EMAIL_CAMPAIGNS.RAW_DATA.OPENS
+from  {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.OPENS
 where cam_id is not null
 and normalized_company_domain is not null
 and date is not null
 group by 1,2,3;
 """]
 
-unique_urls_query = ["""
-create or replace table dev_email_campaigns.content.unique_urls as
+unique_urls_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.content.unique_urls as
 select 
        split_part(link,'?email',1) as page_url, --index is 1-based
        any_value(hash(page_url)) as page_url_hash,
-       any_value(dev_datamart.public.domain_normalizer(split_part(replace(replace(page_url, 'http://'), 'https://'),'/',1))) as publisher_domain_normalized,
+       any_value({DATAMART_DATABASE}.public.domain_normalizer(split_part(replace(replace(page_url, 'http://'), 'https://'),'/',1))) as publisher_domain_normalized,
        min(date(time)) as first_seen,
        max(date(time)) as last_seen,
        count(*) as frequency
-from "DEV_EMAIL_CAMPAIGNS"."RAW_DATA"."CLICKS"
+from {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.CLICKS
 group by 1;
 """]
 
-campaign_content_query = ["""
-create or replace table dev_email_campaigns.content.campaign_content as
+campaign_content_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.content.campaign_content as
 select distinct
     cam_id,
     split_part(link,'?email',1) as page_url --index is 1-based
-from "DEV_EMAIL_CAMPAIGNS"."RAW_DATA"."CLICKS";
+from {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.CLICKS;
 """]
 
-campaign_topics_query = ["""
-create or replace table dev_email_campaigns.content.campaign_topics as
+campaign_topics_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.content.campaign_topics as
 with joined_topics as (
 select
     t.cam_id,
@@ -107,8 +110,8 @@ select
     f.value:category::varchar as category,
     f.value:topic::varchar as topic,
     sum(f.value:probability::number(5,4)) as summed_topic_probabilities
-from (select a.cam_id, a.page_url, b.intent_topics from "DEV_EMAIL_CAMPAIGNS"."CONTENT"."CAMPAIGN_CONTENT" a
-join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" b
+from (select a.cam_id, a.page_url, b.intent_topics from {EMAIL_CAMPAIGNS_DATABASE}.CONTENT.CAMPAIGN_CONTENT a
+join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT b
 on a.page_url = b.page_url) t,
 lateral flatten(input => t.intent_topics) f
 group by 1,2,3,4
@@ -130,12 +133,12 @@ join campaign_totals b
 on a.cam_id = b.cam_id;
 """]
 
-web_scraper_input_query = ["""
-merge into "DEV_AIML"."WEB_SCRAPER"."INPUT_CACHE" t
+web_scraper_input_query = [f"""
+merge into {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE t
 using (
     select distinct a.page_url
-    from "DEV_EMAIL_CAMPAIGNS"."CONTENT"."UNIQUE_URLS" a
-    left join "DEV_AIML"."WEB_SCRAPER"."RESULTS" b
+    from {EMAIL_CAMPAIGNS_DATABASE}.CONTENT.UNIQUE_URLS a
+    left join {AIML_DATABASE}.WEB_SCRAPER.RESULTS b
     on a.page_url = b.page_url
     where last_scraped is null) s
 on t.page_url = s.page_url
@@ -146,8 +149,8 @@ when matched then update set
 date_inserted = current_date;
 """]
 
-prescoring_query = ["""
-create or replace table dev_email_campaigns.activity.prescoring as
+prescoring_query = [f"""
+create or replace table {EMAIL_CAMPAIGNS_DATABASE}.activity.prescoring as
 with joined_clicks as (
 select
     t.normalized_company_domain,
@@ -157,8 +160,8 @@ select
     f.value:topic::varchar as topic,
     sum(t.frequency * f.value:probability::number(5,4)) as weighted_clicks
 from (select a.normalized_company_domain, a.date, a.frequency, b.intent_topics 
-      from "DEV_EMAIL_CAMPAIGNS"."ACTIVITY"."COMPANY_CLICKS" a
-     join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" b
+      from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.COMPANY_CLICKS a
+     join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT b
      on a.page_url = b.page_url) t,
 lateral flatten(input => t.intent_topics) f
 group by 1,2,3,4,5),
@@ -171,8 +174,8 @@ select
     b.category,
     b.topic,
     sum(a.frequency * b.proportion) as weighted_opens
-from "DEV_EMAIL_CAMPAIGNS"."ACTIVITY"."COMPANY_OPENS" a
-join "DEV_EMAIL_CAMPAIGNS"."CONTENT"."CAMPAIGN_TOPICS" b
+from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.COMPANY_OPENS a
+join {EMAIL_CAMPAIGNS_DATABASE}.CONTENT.CAMPAIGN_TOPICS b
 on a.cam_id = b.cam_id
 group by 1,2,3,4,5)
 
