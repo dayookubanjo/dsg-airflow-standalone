@@ -33,7 +33,7 @@ def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="PIXEL DAG Success"
+        ,subject="PIXEL DAG SUCCESS"
         ,message=f"Pixel Data Processing has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)

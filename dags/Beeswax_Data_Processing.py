@@ -4,11 +4,20 @@ from airflow import DAG
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
 from airflow.operators.python_operator import PythonOperator
+from airflow.models import Variable 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# ---Variable definition--- #
+#-----Importing Variables----
+SNS_ARN=Variable.get("SNS_ARN")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+BIDSTREAM_DATABASE = Variable.get("BIDSTREAM_DATABASE")
+DATAMART_DATABASE = Variable.get("DATAMART_DATABASE")
+DE_DATABASE = Variable.get("DE_DATABASE")
+AIML_DATABASE = Variable.get("AIML_DATABASE")
 
+# ---Variable definition--- #
+WBI_SIZE_TRANSFORMS = '180'
 dt = datetime.now()
 date_time = dt.strftime("%m%d%Y%H:%M:%S")
 
@@ -19,54 +28,50 @@ def end_success():
 def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:Beeswax_Data_Processing"
-        ,subject="DAG FAILED"
+        ,target_arn=SNS_ARN
+        ,subject="BEESWAX DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
 
-    
 def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:Beeswax_Data_Processing"
-        ,subject="DAG Success"
+        ,target_arn=SNS_ARN
+        ,subject="BEESWAX DAG SUCCESS"
         ,message=f"Beeswax Data Processing has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
-    
-SNOWFLAKE_CONN = "Airflow-Dev_Transform-connection"
-
-WBI_SIZE_TRANSFORMS = '180'
 
 
 dag = DAG('Beeswax_Channel', start_date = datetime(2022, 12, 7), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'depends_on_past' : False,'retries' : 0,'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
+
 # ---- USER ACTIVITY ---- #
 user_activity_query = [
-"""
-set raw_bidstream_watermark = (select ifnull(max(date), date('2022-10-13')) from dev_bidstream.activity.user_activity);
+f"""
+set raw_bidstream_watermark = (select ifnull(max(date), date('2022-10-13')) from {BIDSTREAM_DATABASE}.activity.user_activity);
 """,
 
 """
 set raw_bidstream_max_date = 
 (select 
 least(
-    (select max(date(bid_time)) from "BEESWAX_EXTERNAL_SHARE"."ANTENNA"."SHARED_DEMANDSCIENCE_AUCTIONS_VIEW"),
+    (select max(date(bid_time)) from BEESWAX_EXTERNAL_SHARE.ANTENNA.SHARED_DEMANDSCIENCE_AUCTIONS_VIEW),
     dateadd(day, {}, $raw_bidstream_watermark)));
 """.format(WBI_SIZE_TRANSFORMS),
 
-"""
-delete from dev_bidstream.activity.user_activity_cache
+f"""
+delete from {BIDSTREAM_DATABASE}.activity.user_activity_cache
 where date > $raw_bidstream_watermark
 and date < $raw_bidstream_max_date;
 """,
-"""
-insert into dev_bidstream.activity.user_activity_cache
+f"""
+insert into {BIDSTREAM_DATABASE}.activity.user_activity_cache
 select
     trim(page_url) as page_url,
-    any_value(dev_datamart.public.domain_normalizer(ifnull(domain,''))) as publisher_domain_normalized,
+    any_value({DATAMART_DATABASE}.public.domain_normalizer(ifnull(domain,''))) as publisher_domain_normalized,
     trim(user_id) as user_id,
     trim(ip_address) as user_ip,
     date(bid_time) as date,
@@ -75,7 +80,7 @@ select
     '' as bw_city_normalized, -- TODO: replace with join between city code and city name,
     geo_zip as bw_zip_normalized,
     count(*) as pageviews
-from "BEESWAX_EXTERNAL_SHARE"."ANTENNA"."SHARED_DEMANDSCIENCE_AUCTIONS_VIEW"
+from BEESWAX_EXTERNAL_SHARE.ANTENNA.SHARED_DEMANDSCIENCE_AUCTIONS_VIEW
 where date > $raw_bidstream_watermark
     and date < $raw_bidstream_max_date
     and page_url is not null 
@@ -85,19 +90,19 @@ where date > $raw_bidstream_watermark
 group by 1,3,4,5,6,7,8,9;
 """]
 
-user_activity_cache_to_cumulative_query = ["""
-delete from dev_bidstream.activity.user_activity
-where date in (select distinct date from dev_bidstream.activity.user_activity_cache);
+user_activity_cache_to_cumulative_query = [f"""
+delete from {BIDSTREAM_DATABASE}.activity.user_activity
+where date in (select distinct date from {BIDSTREAM_DATABASE}.activity.user_activity_cache);
 """,
-"""
-insert into dev_bidstream.activity.user_activity
-select * from dev_bidstream.activity.user_activity_cache;
+f"""
+insert into {BIDSTREAM_DATABASE}.activity.user_activity
+select * from {BIDSTREAM_DATABASE}.activity.user_activity_cache;
 """]
 
 # ---- IP MAPPINGS ---- #
 #IP2LOC
-bidstream_ip_mappings_query = ["""
-create or replace table dev_bidstream.entity_relationships.ip_to_location_cache as
+bidstream_ip_mappings_query = [f"""
+create or replace table {BIDSTREAM_DATABASE}.entity_relationships.ip_to_location_cache as
 select distinct
     user_ip as ip,
     first_value(date) over (partition by user_ip order by date desc) as date_updated,
@@ -114,14 +119,14 @@ select distinct
             bw_city_normalized as normalized_city_name, --TODO: add a join to get the actual city name
             bw_zip_normalized as normalized_zip,
             normalized_country_code || normalized_region_code || normalized_city_name || normalized_zip as location_key
-        from "DEV_BIDSTREAM"."ACTIVITY"."USER_ACTIVITY_CACHE")
+        from {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY_CACHE)
      where user_ip is not null
      and len(user_ip)>0;
 """]
 
-bidstream_ip_mappings_cache_to_cumulative_query = ["""
-merge into dev_bidstream.entity_relationships.ip_to_location t
-using (dev_bidstream.entity_relationships.ip_to_location_cache) s
+bidstream_ip_mappings_cache_to_cumulative_query = [f"""
+merge into {BIDSTREAM_DATABASE}.entity_relationships.ip_to_location t
+using ({BIDSTREAM_DATABASE}.entity_relationships.ip_to_location_cache) s
 on t.ip = s.ip
 when not matched then insert
 (ip, date_updated, normalized_country_code, normalized_region_code, normalized_city_name, normalized_zip)
@@ -135,11 +140,11 @@ normalized_city_name = s.normalized_city_name,
 normalized_zip = s.normalized_zip;
 """]
 
-datamart_ip_location_mappings_update_query = ["""
+datamart_ip_location_mappings_update_query = [f"""
 set de_confidence_threshold = 0; -- eventually change this to something higher
 """,
-"""
-merge into dev_datamart.entity_mappings.ip_to_location t
+f"""
+merge into {DATAMART_DATABASE}.entity_mappings.ip_to_location t
 using (
     select 
         bw.ip,
@@ -152,9 +157,9 @@ using (
         iff(loc_source = 'DE',de.normalized_region_code,bw.normalized_region_code) as normalized_region_code,
         iff(loc_source = 'DE',de.normalized_city_name,bw.normalized_city_name) as normalized_city_name,
         iff(loc_source = 'DE',de.normalized_zip,bw.normalized_zip) as normalized_zip
-    from dev_bidstream.entity_relationships.ip_to_location_cache bw
-    join dev_digital_element.mappings.ip_range_mappings_filtered de
-    on dev_digital_element.public.ip_to_number(bw.ip) between de.ip_range_start_numeric and de.ip_range_end_numeric) s
+    from {BIDSTREAM_DATABASE}.entity_relationships.ip_to_location_cache bw
+    join {DE_DATABASE}.mappings.ip_range_mappings_filtered de
+    on {DE_DATABASE}.public.ip_to_number(bw.ip) between de.ip_range_start_numeric and de.ip_range_end_numeric) s
 on s.ip = t.ip
 when matched then update set
 date_updated = s.date_updated,
@@ -169,16 +174,16 @@ values
 """]
 
 #IP2DOMAIN
-de_ip_domain_obs_query = ["""
-merge into dev_datamart.entity_mappings.ip_to_company_domain_observations t
+de_ip_domain_obs_query = [f"""
+merge into {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain_observations t
 using (
     select distinct
         bw.user_ip as ip,
         de.normalized_company_domain,
         de.date_updated
-    from dev_bidstream.activity.user_activity_cache bw
-    join dev_digital_element.mappings.ip_range_mappings_filtered de
-    on dev_digital_element.public.ip_to_number(bw.user_ip) between de.ip_range_start_numeric and de.ip_range_end_numeric
+    from {BIDSTREAM_DATABASE}.activity.user_activity_cache bw
+    join {DE_DATABASE}.mappings.ip_range_mappings_filtered de
+    on {DE_DATABASE}.public.ip_to_number(bw.user_ip) between de.ip_range_start_numeric and de.ip_range_end_numeric
     where ip is not null and len(ip) > 0
     and normalized_company_domain is not null and len(normalized_company_domain)>1) s
 on s.ip = t.ip
@@ -191,15 +196,15 @@ values
 (s.ip, s.normalized_company_domain, 'DIGITAL ELEMENT', s.date_updated);
 """]
 
-datamart_ip_domain_mappings_update_query = ["""
-create or replace table "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN" as
+datamart_ip_domain_mappings_update_query = [f"""
+create or replace table {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as
 with most_recent as(
     select distinct
     ip,
     first_value(normalized_company_domain) over (partition by ip, source order by date desc) as latest_domain,
     source,
     source_confidence
-from "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN_OBSERVATIONS"
+from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
 ),
 rolled_obs as (
     select
@@ -222,14 +227,14 @@ from rolled_obs;
 """]
 
 #--- DIG Updates ----- #
-bitoid_to_ip_cache_query = ["""
-merge into dev_bidstream.entity_relationships.bitoid_to_ip_observations_cache t
+bitoid_to_ip_cache_query = [f"""
+merge into {BIDSTREAM_DATABASE}.entity_relationships.bitoid_to_ip_observations_cache t
 using (
     select distinct
     user_id,
     user_ip,
     date
-from "DEV_BIDSTREAM"."ACTIVITY"."USER_ACTIVITY_CACHE"
+from {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY_CACHE
 where (len(user_ip) > 1) and (user_ip is not null) and (not endswith(user_ip,'.0'))
 and (len(user_id) > 1) and (user_id is not null)  
     ) s
@@ -243,9 +248,9 @@ values
 
 """]
 
-bitoid_to_ip_cache_to_obs_query = ["""
-merge into "DEV_DATAMART"."ENTITY_MAPPINGS"."BITOID_TO_IP_OBSERVATIONS" t
-using dev_bidstream.entity_relationships.bitoid_to_ip_observations_cache s
+bitoid_to_ip_cache_to_obs_query = [f"""
+merge into {DATAMART_DATABASE}.ENTITY_MAPPINGS.BITOID_TO_IP_OBSERVATIONS t
+using {BIDSTREAM_DATABASE}.entity_relationships.bitoid_to_ip_observations_cache s
 on t.ip = s.ip
 and t.bitoid = s.bitoid
 and t.date = s.date
@@ -257,8 +262,8 @@ values
 
 """]
 
-bitoid_to_domain_obs_query = ["""
-merge into "DEV_DATAMART"."ENTITY_MAPPINGS"."BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS" t
+bitoid_to_domain_obs_query = [f"""
+merge into {DATAMART_DATABASE}.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS t
 using (
     select
     bitoid,
@@ -266,8 +271,8 @@ using (
     date,
     any_value('BEESWAX-VIA-IP') as source,
     any_value(score) as source_confidence -- for now just take the ip -> domain mapping as the confidence
-from dev_bidstream.entity_relationships.bitoid_to_ip_observations_cache a
-join "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN" b
+from {BIDSTREAM_DATABASE}.entity_relationships.bitoid_to_ip_observations_cache a
+join {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN b
 on a.ip = b.ip
 where len(normalized_company_domain) > 1 and normalized_company_domain is not null
 group by 1,2,3
@@ -282,14 +287,14 @@ values
 (s.bitoid, s.normalized_company_domain, s.source, s.source_confidence, s.date);
 """]
 
-bitoid_to_domain_mappings_query = ["""
-create or replace table "DEV_DATAMART"."ENTITY_MAPPINGS"."BITOID_TO_COMPANY_DOMAIN" as
+bitoid_to_domain_mappings_query = [f"""
+create or replace table {DATAMART_DATABASE}.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN as
 with bitoid_totals as (
     select
     bitoid,
     count(*) as bitoid_total
-from DEV_DATAMART.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS
-where not (normalized_company_domain in (select distinct domain from "DEV_DATAMART"."FILTERS_SUPPRESSIONS"."KNOWN_ISP_DOMAINS"))
+from {DATAMART_DATABASE}.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS
+where not (normalized_company_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS))
 group by 1
 ),
 rolled_obs as (
@@ -301,11 +306,11 @@ rolled_obs as (
     count(*) as frequency,
     any_value(bitoid_total) as total,
     source_score*(frequency/total) as score
-  from DEV_DATAMART.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS a
+  from {DATAMART_DATABASE}.ENTITY_MAPPINGS.BITOID_TO_COMPANY_DOMAIN_OBSERVATIONS a
   join bitoid_totals b
   on a.bitoid = b.bitoid
   where normalized_company_domain != 'Shared'
-  and not (normalized_company_domain in (select distinct domain from "DEV_DATAMART"."FILTERS_SUPPRESSIONS"."KNOWN_ISP_DOMAINS"))
+  and not (normalized_company_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS))
   group by 1,2
 )
 select distinct
@@ -316,23 +321,23 @@ from rolled_obs;
 
 """]
 
-clear_bitoid_to_ip_cache_query = ["""
-truncate table dev_bidstream.entity_relationships.bitoid_to_ip_observations_cache;
+clear_bitoid_to_ip_cache_query = [f"""
+truncate table {BIDSTREAM_DATABASE}.entity_relationships.bitoid_to_ip_observations_cache;
 """]
 
 # ---- COMPANY ACTIVITY ---- #
-company_activity_query = ["""
-set user_activity_watermark = (select ifnull(max(date), '2022-10-13') from dev_bidstream.activity.company_activity);
+company_activity_query = [f"""
+set user_activity_watermark = (select ifnull(max(date), '2022-10-13') from {BIDSTREAM_DATABASE}.activity.company_activity);
 """,
 """
 set user_activity_max_date = (select dateadd(day, {}, $user_activity_watermark));
 """.format(WBI_SIZE_TRANSFORMS),
-"""
-delete from dev_bidstream.activity.company_activity_cache
+f"""
+delete from {BIDSTREAM_DATABASE}.activity.company_activity_cache
 where date > $user_activity_watermark and date <= $user_activity_max_date;
 """,
-"""
-insert into dev_bidstream.activity.company_activity_cache
+f"""
+insert into {BIDSTREAM_DATABASE}.activity.company_activity_cache
 -- company activity cache leveraging DIG
 -- assumption: user_ip or user_id might be null, but not both. user_ip might end in .0
 -- first join everything together
@@ -344,7 +349,7 @@ select
     d.score as ip_domain_conf,
     dig.normalized_company_domain as dig_domain, -- will never be a known ISP (we remove them in DIG)
     dig.score as dig_domain_conf,
-    iff(dig_domain in (select distinct domain from "DEV_DATAMART"."FILTERS_SUPPRESSIONS"."KNOWN_ISP_DOMAINS"), true, false) as ip_domain_is_isp,
+    iff(dig_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS), true, false) as ip_domain_is_isp,
     a.date,
     a.bw_country_normalized as bw_country,
     a.bw_region_normalized as bw_region,
@@ -359,14 +364,14 @@ select
     a.pageviews,
     a.user_id,
     a.user_ip
-from dev_bidstream.activity.user_activity_cache a -- CHANGE BACK TO CACHE
-left join dev_datamart.entity_mappings.ip_to_company_domain d
+from {BIDSTREAM_DATABASE}.activity.user_activity_cache a -- CHANGE BACK TO CACHE
+left join {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain d
 on a.user_ip = d.ip
-left join dev_datamart.entity_mappings.bitoid_to_company_domain dig
+left join {DATAMART_DATABASE}.entity_mappings.bitoid_to_company_domain dig
 on a.user_id = dig.bitoid
-left join dev_datamart.entity_mappings.ip_to_location l
+left join {DATAMART_DATABASE}.entity_mappings.ip_to_location l
 on a.user_ip = l.ip
-left join dev_datamart.geographics.unique_geos g
+left join {DATAMART_DATABASE}.geographics.unique_geos g
 on bw_country = g.normalized_country_code and bw_region = g.normalized_region_code and bw_zip = g.normalized_zip
 where a.date > $user_activity_watermark and a.date <= $user_activity_max_date
 ),
@@ -421,9 +426,9 @@ from joined_activity
 """]
 
 company_activity_cache_to_cumulative_query = [
-"""
-merge into dev_bidstream.activity.company_activity t
-using dev_bidstream.activity.company_activity_cache s
+f"""
+merge into {BIDSTREAM_DATABASE}.activity.company_activity t
+using {BIDSTREAM_DATABASE}.activity.company_activity_cache s
 on  s.page_url = t.page_url
 and s.normalized_company_domain = t.normalized_company_domain
 and s.date = t.date
@@ -460,14 +465,14 @@ s.unique_ips)
 ;
 """]
 
-delete_from_user_activity_cache_query = ["""
-delete from dev_bidstream.activity.user_activity_cache
-where date in (select distinct date from dev_bidstream.activity.company_activity_cache);
+delete_from_user_activity_cache_query = [f"""
+delete from {BIDSTREAM_DATABASE}.activity.user_activity_cache
+where date in (select distinct date from {BIDSTREAM_DATABASE}.activity.company_activity_cache);
 """]
 
 # --- PRESCORING ---- #
-prescoring_cache_query = ["""
-merge into dev_bidstream.activity.prescoring_cache t
+prescoring_cache_query = [f"""
+merge into {BIDSTREAM_DATABASE}.activity.prescoring_cache t
 using (
     select
         activity.*,
@@ -477,12 +482,12 @@ using (
         title.url_type,
         title.activity_type,
         title.information_type
-    from "DEV_BIDSTREAM"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" activity
-    join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
+    from {BIDSTREAM_DATABASE}.ACTIVITY.COMPANY_ACTIVITY_CACHE activity
+    join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT taxo
     on activity.page_url = taxo.page_url
-    join "DEV_AIML"."CONTEXT_CLASSIFIER"."OUTPUT" context
+    join {AIML_DATABASE}.CONTEXT_CLASSIFIER.OUTPUT context
     on activity.page_url = context.page_url
-    join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" title
+    join {AIML_DATABASE}.TITLE_CLASSIFIER.OUTPUT title
     on activity.page_url = title.page_url) s
 on s.page_url = t.page_url
 and s.normalized_company_domain = t.normalized_company_domain
@@ -545,9 +550,9 @@ when not matched then insert
 
 
 
-delete_from_company_activity_cache_query = ["""
-delete from "DEV_BIDSTREAM"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" a
- using "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING_CACHE" b
+delete_from_company_activity_cache_query = [f"""
+delete from {BIDSTREAM_DATABASE}.ACTIVITY.COMPANY_ACTIVITY_CACHE a
+ using {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE b
  where a.page_url = b.page_url
  and a.normalized_company_domain = b.normalized_company_domain
  and a.date = b.date
@@ -558,14 +563,14 @@ delete from "DEV_BIDSTREAM"."ACTIVITY"."COMPANY_ACTIVITY_CACHE" a
 """]
 
 # ---- UNIQUE URLS ---- #
-unique_urls_query = ["""
-set company_activity_watermark = (select ifnull(max(last_seen), '2022-10-13') from dev_bidstream.content.unique_urls);
+unique_urls_query = [f"""
+set company_activity_watermark = (select ifnull(max(last_seen), '2022-10-13') from {BIDSTREAM_DATABASE}.content.unique_urls);
 """,
 """
 set company_activity_max_date = (select dateadd(day, {}, $company_activity_watermark));
 """.format(WBI_SIZE_TRANSFORMS),
-"""
-merge into dev_bidstream.content.unique_urls_cache t
+f"""
+merge into {BIDSTREAM_DATABASE}.content.unique_urls_cache t
 using (
 select
     page_url,
@@ -574,7 +579,7 @@ select
     min(date) as first_seen,
     max(date) as last_seen,
     count(*) as frequency
-from dev_bidstream.activity.company_activity_cache
+from {BIDSTREAM_DATABASE}.activity.company_activity_cache
 where date > $company_activity_watermark and date <= $company_activity_max_date
 group by 1,2) s
 on t.page_url = s.page_url
@@ -588,9 +593,9 @@ last_seen = s.last_seen,
 frequency = iff(s.last_seen = t.last_seen, t.frequency, s.frequency + t.frequency);
 """]
 
-unique_urls_cache_to_cumulative_query = ["""
-merge into dev_bidstream.content.unique_urls t
-using dev_bidstream.content.unique_urls_cache s
+unique_urls_cache_to_cumulative_query = [f"""
+merge into {BIDSTREAM_DATABASE}.content.unique_urls t
+using {BIDSTREAM_DATABASE}.content.unique_urls_cache s
 on t.page_url = s.page_url
 when not matched then insert
 (page_url, page_url_hash, publisher_domain_normalized, first_seen, last_seen, frequency)
@@ -602,29 +607,29 @@ last_seen = s.last_seen,
 frequency = iff(s.last_seen = t.last_seen, t.frequency, s.frequency + t.frequency);
 """]
 
-delete_from_unique_urls_cache_query = ["""
-Delete from "DEV_BIDSTREAM"."CONTENT"."UNIQUE_URLS_CACHE" 
-where page_url in (select distinct page_url from dev_aiml.web_scraper.input_cache);
+delete_from_unique_urls_cache_query = [f"""
+Delete from {BIDSTREAM_DATABASE}.CONTENT.UNIQUE_URLS_CACHE 
+where page_url in (select distinct page_url from {AIML_DATABASE}.web_scraper.input_cache);
 """,
-"""
-Delete from "DEV_BIDSTREAM"."CONTENT"."UNIQUE_URLS_CACHE" 
-where page_url in (select distinct page_url from dev_aiml.web_scraper.results);
+f"""
+Delete from {BIDSTREAM_DATABASE}.CONTENT.UNIQUE_URLS_CACHE 
+where page_url in (select distinct page_url from {AIML_DATABASE}.web_scraper.results);
 """]
 
 # ---- WEB Scraper Data load ---- #
 
 web_scraper_input_cache_query = [
-"""merge into "DEV_AIML"."WEB_SCRAPER"."INPUT_CACHE" t
+f"""merge into {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE t
 using (
 select distinct
     a.page_url,
   a.last_seen
-from "DEV_BIDSTREAM"."CONTENT"."UNIQUE_URLS_CACHE" a
-left join dev_aiml.web_scraper.results b
+from {BIDSTREAM_DATABASE}.CONTENT.UNIQUE_URLS_CACHE a
+left join {AIML_DATABASE}.web_scraper.results b
 on a.page_url = b.page_url
 where last_scraped is null
 and not (publisher_domain_normalized in 
-  (select distinct publisher_domain_normalized from DEV_DATAMART.FILTERS_SUPPRESSIONS.HIGH_VOLUME_BAD_PUBS_SUPPRESS))
+  (select distinct publisher_domain_normalized from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.HIGH_VOLUME_BAD_PUBS_SUPPRESS))
 order by a.last_seen desc limit 2000000) s
 on t.page_url = s.page_url
 when not matched then insert
@@ -643,101 +648,101 @@ with dag:
     user_activity_exec = SnowflakeOperator(
     task_id= "raw_bidstream_to_user_activity_cache",
     sql= user_activity_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     user_activity_cache_to_cumulative_exec = SnowflakeOperator(
     task_id= "user_activity_cache_to_cumulative",
     sql= user_activity_cache_to_cumulative_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     # --- IP MAPPINGS --- #
     bidstream_ip_mappings_exec = SnowflakeOperator(
     task_id= "bidstream_ip_mappings_cache",
     sql= bidstream_ip_mappings_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     bidstream_ip_mappings_cache_to_cumulative_exec = SnowflakeOperator(
     task_id= "bidstream_ip_mappings_cache_to_cumulative",
     sql= bidstream_ip_mappings_cache_to_cumulative_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     datamart_ip_loc_mappings_exec = SnowflakeOperator(
     task_id= "datamart_ip_loc_update",
     sql= datamart_ip_location_mappings_update_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     de_ip_domain_obs_exec = SnowflakeOperator(
     task_id= "de_ip_domain_obs_update",
     sql= de_ip_domain_obs_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     datamart_ip_domain_mappings_exec = SnowflakeOperator(
     task_id= "datamart_ip_domain_update",
     sql= datamart_ip_domain_mappings_update_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     #-----DIG LOGIC ----#
     bitoid_to_ip_cache_exec = SnowflakeOperator(
     task_id= "bitoid_to_ip_cache",
     sql= bitoid_to_ip_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     bitoid_to_domain_obs_exec = SnowflakeOperator(
     task_id= "bitoid_to_domain_obs",
     sql= bitoid_to_domain_obs_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     bitoid_to_domain_map_exec = SnowflakeOperator(
     task_id= "bitoid_to_domain_map",
     sql= bitoid_to_domain_mappings_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     bitoid_to_ip_cache_to_obs_exec = SnowflakeOperator(
     task_id= "bitoid_to_ip_cache_to_obs",
     sql= bitoid_to_ip_cache_to_obs_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     clear_bitoid_to_ip_cache_exec = SnowflakeOperator(
     task_id= "clear_bitoid_to_ip_cache",
     sql= clear_bitoid_to_ip_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     # --- COMPANY ACTIVITY --- #
     company_activity_exec = SnowflakeOperator(
     task_id= "company_activity_cache",
     sql= company_activity_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     company_activity_cache_to_cumulative_exec = SnowflakeOperator(
     task_id= "company_activity_cache_to_cumulative",
     sql= company_activity_cache_to_cumulative_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     delete_from_user_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_user_activity_cache",
     sql= delete_from_user_activity_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     # --- PRESCORING --- #
     prescoring_cache_exec = SnowflakeOperator(
     task_id= "prescoring_cache",
     sql= prescoring_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     
@@ -745,7 +750,7 @@ with dag:
     delete_from_company_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_company_activity_cache",
     sql= delete_from_company_activity_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
 
@@ -753,13 +758,13 @@ with dag:
     unique_urls_exec = SnowflakeOperator(
     task_id= "unique_urls_cache",
     sql= unique_urls_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     unique_urls_cache_to_cumulative_exec = SnowflakeOperator(
     task_id= "unique_urls_cache_to_cumulative",
     sql= unique_urls_cache_to_cumulative_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
 
@@ -768,13 +773,13 @@ with dag:
     web_scraper_input_cache_exec = SnowflakeOperator(
     task_id= "web_scraper_input__cache",
     sql= web_scraper_input_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
     
     delete_from_unique_urls_cache_exec = SnowflakeOperator(
     task_id= "delete_from_unique_urls_cache",
     sql= delete_from_unique_urls_cache_query,
-    snowflake_conn_id= SNOWFLAKE_CONN,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     #----OTHER STEPS----

@@ -10,19 +10,22 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# ---- Global variables ----
-SNOWFLAKE_TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection" 
-SNOWFLAKE_LOAD_CONNECTION = "Airflow-Dev_load-connection"
+#-----Importing Variables----
+SNS_ARN=Variable.get("SNS_ARN")
+LOAD_CONNECTION = Variable.get("LOAD_CONNECTION")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+LEADSIFT_DATABASE = Variable.get("LEADSIFT_DATABASE")
 
 # ---- error handling ----
 def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:leadsift-dag"
-        ,subject="DAG FAILED"
+        ,target_arn=SNS_ARN
+        ,subject="LEADSIFT DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -32,8 +35,8 @@ def on_failure_callback(context):
 def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:leadsift-dag"
-        ,subject="DAG Success"
+        ,target_arn=SNS_ARN
+        ,subject="LEADSIFT DAG SUCCESS"
         ,message=f"LeadSift ingestion DAG has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
@@ -46,29 +49,16 @@ def end_success():
 # Snowflake Queries
 
 load_data_from_s3_query = [
-    """COPY INTO DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES_CACHE FROM 
-'s3://leadsift/campaign-2906/'
-STORAGE_INTEGRATION = "DEV_LEADIRO_S3"
-FILE_FORMAT = (
-  type = csv
-  record_delimiter = '\n'
-  field_delimiter = ',' 
-  SKIP_HEADER = 1 
-  null_if = ('NULL', 'null')
-  empty_field_as_null = true
-  FIELD_OPTIONALLY_ENCLOSED_BY = '0x22'
-  ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE
-)
-ON_ERROR = 'SKIP_FILE' ;"""
+f"""COPY INTO {LEADSIFT_DATABASE}.raw_data.leadsift_flat_files_cache FROM @{LEADSIFT_DATABASE}.raw_data.leadsift_flat_files_cache ON_ERROR = 'SKIP_FILE';"""
     ]
 
 merge_cache_to_output_query = [
-    """MERGE INTO DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES as target_table
+    f"""MERGE INTO {LEADSIFT_DATABASE}.raw_data.leadsift_flat_files as target_table
 USING 
 (
   SELECT FILE_DATE,COALESCE(CATEGORY, 'NULL VALUE') AS CATEGORY,COALESCE(DOMAIN, 'NULL VALUE') AS DOMAIN,COALESCE(COMPANY, 'NULL VALUE') AS COMPANY,COALESCE(ENTITY_TRIGGER, 'NULL VALUE') AS ENTITY_TRIGGER,COALESCE(SENIORITY, 'NULL VALUE') AS SENIORITY,COALESCE(ENTITY_FUNCTION, 'NULL VALUE') AS ENTITY_FUNCTION,
    COALESCE(TRIGGER_TYPE, 'NULL VALUE') AS TRIGGER_TYPE,COALESCE(INDUSTRY, 'NULL VALUE') AS INDUSTRY,COALESCE(COMPANY_SIZE, 'NULL VALUE') AS COMPANY_SIZE,COALESCE(CITY, 'NULL VALUE') AS CITY,COALESCE(STATE, 'NULL VALUE') AS STATE,COALESCE(COUNTRY, 'NULL VALUE') AS COUNTRY,  MAX( COALESCE(SCORE, 0) ) AS SCORE
-  FROM DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES_CACHE 
+  FROM {LEADSIFT_DATABASE}.raw_data.leadsift_flat_files_cache 
   GROUP BY FILE_DATE,COALESCE(CATEGORY, 'NULL VALUE')  ,COALESCE(DOMAIN, 'NULL VALUE')  ,COALESCE(COMPANY, 'NULL VALUE')  ,COALESCE(ENTITY_TRIGGER, 'NULL VALUE') ,COALESCE(SENIORITY, 'NULL VALUE') ,COALESCE(ENTITY_FUNCTION, 'NULL VALUE')  ,
    COALESCE(TRIGGER_TYPE, 'NULL VALUE')  ,COALESCE(INDUSTRY, 'NULL VALUE')  ,COALESCE(COMPANY_SIZE, 'NULL VALUE') ,COALESCE(CITY, 'NULL VALUE') ,COALESCE(STATE, 'NULL VALUE')  ,COALESCE(COUNTRY, 'NULL VALUE') 
   
@@ -110,12 +100,12 @@ WHEN NOT MATCHED THEN
     ]
 
 cleanup_tables_query = [
-    """TRUNCATE TABLE DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES_CACHE;""" 
+    f"""TRUNCATE TABLE {LEADSIFT_DATABASE}.raw_data.leadsift_flat_files_cache;""" 
 ]
 
 prescoring_query = [
-    """
-    create or replace table dev_leadsift.activity.prescoring as
+    f"""
+    create or replace table {LEADSIFT_DATABASE}.activity.prescoring as
     select
         file_date as date,
         ds_parent_category as parent_category,
@@ -123,8 +113,8 @@ prescoring_query = [
         ds_topic as topic,
         dev_datamart.public.domain_normalizer(domain) as normalized_company_domain,
         max(score) as leadsift_score
-    from DEV_LEADSIFT.RAW_DATA.LEADSIFT_FLAT_FILES a
-    join "DEV_LEADSIFT"."PUBLIC"."TOPIC_MAPPINGS" b
+    from {LEADSIFT_DATABASE}.RAW_DATA.LEADSIFT_FLAT_FILES a
+    join {LEADSIFT_DATABASE}.PUBLIC.TOPIC_MAPPINGS b
     on a.entity_trigger = b.leadsift_category
     group by 1,2,3,4,5;
     """
@@ -152,25 +142,25 @@ with DAG(
     load_data_from_s3_exec = SnowflakeOperator(
         task_id= "load_data_from_s3",
         sql= load_data_from_s3_query,
-        snowflake_conn_id= SNOWFLAKE_LOAD_CONNECTION,
+        snowflake_conn_id= LOAD_CONNECTION,
     )
 
     merge_cache_to_output_exec = SnowflakeOperator(
         task_id= "merge_cache_to_output",
         sql= merge_cache_to_output_query,
-        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+        snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     cleanup_tables_exec = SnowflakeOperator(
         task_id= "cleanup_tables",
         sql= cleanup_tables_query,
-        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+        snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
     prescoring_exec = SnowflakeOperator(
         task_id= "prescoring",
         sql= prescoring_query,
-        snowflake_conn_id= SNOWFLAKE_TRANSFORM_CONNECTION,
+        snowflake_conn_id= TRANSFORM_CONNECTION,
     )    
 
     end_success_exec = PythonOperator(

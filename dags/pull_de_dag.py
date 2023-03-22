@@ -1,13 +1,13 @@
-#------ standard python imports ----
+#------ Standard Python Imports ----
 from datetime import datetime 
 import logging
 import time
 from typing import List
 
-#--------- aws imports -------
+#--------- Aws Imports -------
 import boto3
 
-#--- airflow imports -------
+#--- Airflow Imports -------
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
@@ -27,13 +27,14 @@ LOAD_CONNECTION = Variable.get("LOAD_CONNECTION")
 TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
 DE_LAUNCH_TEMPLATE_ID = Variable.get("DE_LAUNCH_TEMPLATE_ID")
 S3_DE_BUCKET=Variable.get("S3_DE_BUCKET")
-# ---- Global variables ----
+
+# ---- Global Variables ----
 EC2_WAITTIME = 3*60
 POKE_INTERVAL = 10
 POKE_TIMEOUT = 25*60
 FILE_SIZE_IN_BYTES = 2.5 * 1000 * 1048576
 
-# ---- error handling ----
+#-----SNS Notification----
 def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
@@ -52,13 +53,11 @@ def on_timeout_callback(context):
     )
     op.execute(context)
 
-#-----SNS Success notification----
-    
 def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="DIGITAL-ELEMENT DAG Success"
+        ,subject="DIGITAL-ELEMENT DAG SUCCESS"
         ,message=f"Digital Element ingestion DAG has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
@@ -104,7 +103,7 @@ and normalized_country_code in ('USA', 'CAN', 'GBR', 'DEU', 'SWE', 'NLD', 'NOR',
 and not startswith(normalized_company_domain, 'ip-');"""
     ]
 
-#----- begin DAG definition -------
+#----- Begin DAG definition -------
 with DAG(
     'Digital-Element-Ingestion',
     default_args={
