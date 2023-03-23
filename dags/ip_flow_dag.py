@@ -421,4 +421,4 @@ with DAG(
         on_success_callback = on_success_callback
         )
 
-    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> [snowflake_merge_output_staging_exec , snowflake_merge_output_mappings_exec] >> [merge_devmart_domain_observations_exec >> snowflake_create_devmart_domain_exec, snowflake_normalize_loc_staging_exec >> snowflake_merge_devmart_location_exec]  >> snowflake_cleanup_tables_exec >> end_success_exec
+    snowflake_insert_input_data_exec >> send_get_requests >> snowflake_insert_success_staging_exec >> [snowflake_merge_output_staging_exec , snowflake_merge_output_mappings_exec] >> [merge_devmart_domain_observations_exec, snowflake_normalize_loc_staging_exec] >>  [snowflake_create_devmart_domain_exec, snowflake_merge_devmart_location_exec] >> snowflake_cleanup_tables_exec >> end_success_exec
