@@ -8,42 +8,39 @@ from airflow.contrib.hooks.snowflake_hook import SnowflakeHook
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
 from airflow.operators.bash import BashOperator
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
+#-----Importing Variables----
+SNS_ARN=Variable.get("SNS_ARN")
+AIML_BUCKET=Variable.get("AIML_BUCKET")
+LOAD_CONNECTION = Variable.get("LOAD_CONNECTION")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+TITLE_FLAG_IN_FILENAME = Variable.get("TITLE_FLAG_IN_FILENAME")
+TITLE_FLAG_OUT_FILENAME = Variable.get("TITLE_FLAG_OUT_FILENAME")
+TITLE_MODEL_INPUT_PATH = Variable.get("TITLE_MODEL_INPUT_PATH")
+TITLE_MODEL_THRESHOLD = Variable.get("TITLE_MODEL_THRESHOLD")
+TITLE_MODEL_STAGE_NAME = Variable.get("TITLE_MODEL_STAGE_NAME")
+TITLE_MODEL_CACHE_TABLE_NAME = Variable.get("TITLE_MODEL_CACHE_TABLE_NAME")
+TITLE_MODEL_SELECT_COLS = Variable.get("TITLE_MODEL_SELECT_COLS")
+TITLE_MODEL_BATCH_LIMIT = Variable.get("TITLE_MODEL_BATCH_LIMIT")
+TITLE_MODEL_MAX_FILE_SIZE = Variable.get("TITLE_MODEL_MAX_FILE_SIZE")
+CONTENT_FLAG_IN_FILENAME = Variable.get("CONTENT_FLAG_IN_FILENAME")
+CONTENT_FLAG_OUT_FILENAME = Variable.get("CONTENT_FLAG_OUT_FILENAME")
+CONTENT_MODEL_INPUT_PATH = Variable.get("CONTENT_MODEL_INPUT_PATH")
+CONTENT_MODEL_STAGE_NAME = Variable.get("CONTENT_MODEL_STAGE_NAME")
+CONTENT_MODEL_CACHE_TABLE_NAME = Variable.get("CONTENT_MODEL_CACHE_TABLE_NAME")
+CONTENT_MODEL_SELECT_COLS = Variable.get("CONTENT_MODEL_SELECT_COLS")
+CONTENT_MODEL_BATCH_LIMIT = Variable.get("CONTENT_MODEL_BATCH_LIMIT")
+CONTENT_MODEL_MAX_FILE_SIZE = Variable.get("CONTENT_MODEL_MAX_FILE_SIZE")
+WEB_SCRAPPER_LAUNCH_TEMPLATE_ID = Variable.get("WEB_SCRAPPER_LAUNCH_TEMPLATE_ID")
+AIML_DATABASE = Variable.get("AIML_DATABASE")
 
 #------ Global Vars ------
-
 dt = datetime.now()
 date_time = dt.strftime("%m%d%Y%H:%M:%S")
-
 DAG_NAME = 'Content_Intelligence'
-SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:content-intelligence-dag'
-
-LOAD_CONNECTION = "Airflow-Dev_load-connection"
-TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
-
-AIML_BUCKET = "ai-ml-dev"
-
-TITLE_FLAG_IN_FILENAME = "url-title-btj-v1"
-TITLE_FLAG_OUT_FILENAME = "flagout-url-title-btj-v1"
-TITLE_MODEL_INPUT_PATH = "PRODUCTION/TITLES_IN/"
-TITLE_MODEL_THRESHOLD = 0.1
-TITLE_MODEL_STAGE_NAME = "dev_aiml.title_classifier.prod_input"
-TITLE_MODEL_CACHE_TABLE_NAME = "dev_aiml.title_classifier.input_cache"
-TITLE_MODEL_SELECT_COLS = "page_url, page_title"
-TITLE_MODEL_BATCH_LIMIT = 3000000
-TITLE_MODEL_MAX_FILE_SIZE = 1000000
-
-CONTENT_FLAG_IN_FILENAME = "gtc-btj-v1"
-CONTENT_FLAG_OUT_FILENAME = "flagout-gtc-btj-v1"
-CONTENT_MODEL_INPUT_PATH = "PRODUCTION/CONTENT_IN/"
-CONTENT_MODEL_STAGE_NAME = "dev_aiml.taxonomy_classifier.prod_input"
-CONTENT_MODEL_CACHE_TABLE_NAME = "dev_aiml.taxonomy_classifier.input_cache"
-CONTENT_MODEL_SELECT_COLS = "page_url, title_plus_content"
-CONTENT_MODEL_BATCH_LIMIT = 2000000
-CONTENT_MODEL_MAX_FILE_SIZE = 15000000
-
 
 #-----SNS Failure notification----
 
@@ -51,7 +48,7 @@ def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
         ,target_arn=SNS_ARN
-        ,subject="DAG FAILED"
+        ,subject="CONTENT_INTELLIGENCE DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -62,7 +59,7 @@ def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="DAG Success"
+        ,subject="CONTENT_INTELLIGENCE DAG SUCCESS"
         ,message=f"{DAG_NAME} has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
@@ -139,15 +136,15 @@ def conditional_model_start(flag_in, flag_out, input_data_path, stage_name, cach
 
 #-----Snowflake queries----
 #-----SCRAPER-------
-scraper_out_query = ["""
-    copy into dev_aiml.web_scraper.output_cache
-    from @dev_aiml.web_scraper.output
+scraper_out_query = [f"""
+    copy into {AIML_DATABASE}.web_scraper.output_cache
+    from @{AIML_DATABASE}.web_scraper.output
     pattern = '.*.json'
     purge = True;
 """]
 
-scraper_results_merge_query = ["""
-    merge into "DEV_AIML"."WEB_SCRAPER"."RESULTS" t
+scraper_results_merge_query = [f"""
+    merge into {AIML_DATABASE}.WEB_SCRAPER.RESULTS t
     using (
         select
             result:url::varchar as page_url,
@@ -157,7 +154,7 @@ scraper_results_merge_query = ["""
             any_value(result:contenttype::varchar) as content_type,
             any_value(result:image::varchar) as image,
             any_value(result:lang::varchar) as language
-        from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE"
+        from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE
         where result != 'null' and result is not null
         group by 1
     ) s
@@ -176,28 +173,28 @@ scraper_results_merge_query = ["""
     language = s.language;
 """]
 
-prune_upload_scraper_input_cache_query = ["""
- delete from dev_aiml.web_scraper.input_cache
- where page_url in (select distinct result:url::varchar from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE")
+prune_upload_scraper_input_cache_query = [f"""
+ delete from {AIML_DATABASE}.web_scraper.input_cache
+ where page_url in (select distinct result:url::varchar from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE)
  """,
  f"""
- copy into @DEV_AIML.WEB_SCRAPER.INPUT_CACHE/{date_time} from 
- (select distinct page_url from DEV_AIML.WEB_SCRAPER.INPUT_CACHE limit 2000000);
+ copy into @{AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE/{date_time} from 
+ (select distinct page_url from {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE limit 2000000);
  """]
 
-clear_scraper_cache_query = ["""
-  truncate table dev_aiml.web_scraper.output_cache;
+clear_scraper_cache_query = [f"""
+  truncate table {AIML_DATABASE}.web_scraper.output_cache;
 """]
 
 #----TITLE MODEL ------
-title_model_input_cache_query = ["""
-  merge into "DEV_AIML"."TITLE_CLASSIFIER"."INPUT_CACHE" t
+title_model_input_cache_query = [f"""
+  merge into {AIML_DATABASE}.TITLE_CLASSIFIER.INPUT_CACHE t
   using (
     select
       result:url::varchar as page_url,
-      dev_aiml.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),25) as title
-    from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE" a
-    left join "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" b
+      {AIML_DATABASE}.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || {AIML_DATABASE}.public.first_n_words_filtered(any_value(result:body::varchar),25) as title
+    from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE a
+    left join {AIML_DATABASE}.TITLE_CLASSIFIER.OUTPUT b
     on a.result:url::varchar = b.page_url
     where result != 'null' and result is not null
     and result:statuscode::varchar = '200'
@@ -216,18 +213,18 @@ title_model_input_cache_query = ["""
 
 """]
 
-title_out_query = ["""
-  copy into "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT_CACHE"
-  from @dev_aiml.title_classifier.prod_output purge=True;
+title_out_query = [f"""
+  copy into {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT_CACHE"
+  from @{AIML_DATABASE}.title_classifier.prod_output purge=True;
 """]
 
-title_cache_to_cumulative_query = ["""
-  merge into "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT" t
+title_cache_to_cumulative_query = [f"""
+  merge into {AIML_DATABASE}.TITLE_CLASSIFIER.OUTPUT t
   using 
   (select page_url,
           any_value(page_title) as page_title,
           any_value(payload) as payload
-   from "DEV_AIML"."TITLE_CLASSIFIER"."OUTPUT_CACHE"
+   from {AIML_DATABASE}.TITLE_CLASSIFIER.OUTPUT_CACHE
    where page_url is not null and len(page_url)>1 and not startswith(lower(page_title),'page not found')
    group by 1) s
   on t.page_url = s.page_url
@@ -250,30 +247,30 @@ title_cache_to_cumulative_query = ["""
    current_date);
 """]
 
-prune_title_model_input_cache_query = ["""
-delete from dev_aiml.title_classifier.input_cache
+prune_title_model_input_cache_query = [f"""
+delete from {AIML_DATABASE}.title_classifier.input_cache
 where page_url in
-(select distinct page_url from dev_aiml.title_classifier.output_cache);
+(select distinct page_url from {AIML_DATABASE}.title_classifier.output_cache);
 """]
 
-clear_title_model_output_cache_query = ["""
-truncate table dev_aiml.title_classifier.output_cache;
+clear_title_model_output_cache_query = [f"""
+truncate table {AIML_DATABASE}.title_classifier.output_cache;
 """]
 
 #------ CONTENT/TAXONOMY MODEL ------
-content_out_query = ["""
-copy into "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT_CACHE"
-from @dev_aiml.taxonomy_classifier.prod_output purge = True;
+content_out_query = [f"""
+copy into {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT_CACHE
+from @{AIML_DATABASE}.taxonomy_classifier.prod_output purge = True;
 """]
 
-content_cache_to_cumulative_query = ["""
-merge into "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" t
+content_cache_to_cumulative_query = [f"""
+merge into {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT t
 using 
   (select
     page_url,
     any_value(content) as content,
     any_value(payload) as intent_topics
-  from "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT_CACHE"
+  from {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT_CACHE
   group by 1) s
 on t.page_url = s.page_url
 when not matched then insert
@@ -287,13 +284,13 @@ date_classified = current_date;
 """]
 
 content_model_input_cache_query = [f"""
-merge into dev_aiml.taxonomy_classifier.input_cache t
+merge into {AIML_DATABASE}.taxonomy_classifier.input_cache t
 using
   (select
       result:url::varchar as page_url,
-      dev_aiml.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || dev_aiml.public.first_n_words_filtered(any_value(result:body::varchar),1000) as title_plus_content
-    from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE" a
-    left join "DEV_AIML"."TAXONOMY_CLASSIFIER"."OUTPUT" b
+      {AIML_DATABASE}.public.first_n_words_filtered(any_value(result:title::varchar),50) || ' ' || {AIML_DATABASE}.public.first_n_words_filtered(any_value(result:body::varchar),1000) as title_plus_content
+    from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE a
+    left join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT b
     on a.result:url::varchar = b.page_url
     where result != 'null' and result is not null
     and result:statuscode::varchar = '200'
@@ -310,19 +307,19 @@ title_plus_content = s.title_plus_content,
 date_inserted = current_date;
 """]
 
-prune_content_model_input_cache_query = ["""
-delete from dev_aiml.taxonomy_classifier.input_cache
+prune_content_model_input_cache_query = [f"""
+delete from {AIML_DATABASE}.taxonomy_classifier.input_cache
 where page_url in
-(select distinct page_url from dev_aiml.taxonomy_classifier.output_cache);
+(select distinct page_url from {AIML_DATABASE}.taxonomy_classifier.output_cache);
 """]
 
-clear_content_model_output_cache_query = ["""
-truncate table dev_aiml.taxonomy_classifier.output_cache;
+clear_content_model_output_cache_query = [f"""
+truncate table {AIML_DATABASE}.taxonomy_classifier.output_cache;
 """]
 
 #----CONTEXT INFERENCE QUERIES---
-label_context_query = ["""
-merge into dev_aiml.context_classifier.output t
+label_context_query = [f"""
+merge into {AIML_DATABASE}.context_classifier.output t
 using (
 select 
     page_url,
@@ -336,8 +333,8 @@ select
     from (
     select
       result:url::varchar as page_url,
-      any_value(result:title::varchar) || ' ' || dev_aiml.public.first_n_words(any_value(result:body::varchar), 25) as page_title
-    from "DEV_AIML"."WEB_SCRAPER"."OUTPUT_CACHE"
+      any_value(result:title::varchar) || ' ' || {AIML_DATABASE}.public.first_n_words(any_value(result:body::varchar), 25) as page_title
+    from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE
     where result != 'null' and result is not null
     and result:statuscode::varchar = '200'
     group by 1
@@ -383,7 +380,7 @@ with dag:
   scraper_start_exec = BashOperator(
     task_id = "launch-instance",
     depends_on_past=False,
-    bash_command="aws ec2 run-instances --count 1 --launch-template LaunchTemplateId=lt-0d1ab6c33588b5145 --region us-east-2"
+    bash_command=f"aws ec2 run-instances --count 1 --launch-template LaunchTemplateId={WEB_SCRAPPER_LAUNCH_TEMPLATE_ID} --region us-east-2"
     ) 
   
   #clear the scraper output cache 
