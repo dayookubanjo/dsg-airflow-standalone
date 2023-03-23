@@ -14,11 +14,22 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 # ---- Global variables ----
-SNOWFLAKE_TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection" 
+SNOWFLAKE_TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+SNS_ARN=Variable.get("SNS_ARN")
+SNOWFLAKE_USER=Variable.get("SNOWFLAKE_USER")
+SNOWFLAKE_PASSWORD=Variable.get("SNOWFLAKE_PASSWORD")
+SNOWFLAKE_ACCOUNT=Variable.get("SNOWFLAKE_ACCOUNT")
+SNOWFLAKE_WAREHOUSE=Variable.get("SNOWFLAKE_WAREHOUSE")
+IP_FLOW_DATABASE=Variable.get("IP_FLOW_DATABASE")
+IP_FLOW_TOKEN=Variable.get("IP_FLOW_TOKEN")
+BIDSTREAM_DATABASE=Variable.get("BIDSTREAM_DATABASE")
+DATAMART_DATABASE=Variable.get("DATAMART_DATABASE")
+FIVE_BY_FIVE_TABLE=Variable.get("FIVE_BY_FIVE_TABLE")
 # today's date
 today = date.today()
 
@@ -26,8 +37,8 @@ today = date.today()
 def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:ip-flow-dag"
-        ,subject="DAG FAILED"
+        ,target_arn=SNS_ARN
+        ,subject="IP FLOW DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -37,8 +48,8 @@ def on_failure_callback(context):
 def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
-        ,target_arn="arn:aws:sns:us-east-2:698085094823:ip-flow-dag"
-        ,subject="DAG Success"
+        ,target_arn=SNS_ARN
+        ,subject="IP FLOW DAG Success"
         ,message=f"IP Flow ingestion DAG has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
@@ -50,17 +61,17 @@ def end_success():
 
 def ip_api_search():
     ctx = snowflake.connector.connect(
-        user='DEV_AIRFLOW',
-        password='Snowflake1',
-        account='nrxpdpq-demandscience_east1',
-        warehouse='DS_WH',
-        database='DEV_IP_FLOW',
+        user=SNOWFLAKE_USER,
+        password=SNOWFLAKE_PASSWORD,
+        account=SNOWFLAKE_ACCOUNT,
+        warehouse=SNOWFLAKE_WAREHOUSE,
+        database=IP_FLOW_DATABASE,
         schema='RAW_DATA'
     )
     cs = ctx.cursor()
 
     # Retrieve the data from the table
-    cs.execute("SELECT * FROM DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_INPUT_DATA")
+    cs.execute(f"SELECT * FROM {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_INPUT_DATA")
 
     rows = cs.fetchall()
 
@@ -70,7 +81,7 @@ def ip_api_search():
     # Set the request headers
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6IkRlbWFuZCBTY2llbmNlIiwibmJmIjoxNjczMDA2MjA3LCJleHAiOjE3MDkxNjQ3NDAsImlhdCI6MTY3MzAwNjIwNywiQWNjZXNzTGV2ZWwiOiJUaWVyMSIsIkNsaWVudCI6IntcIkNsaWVudElkXCI6MzcsXCJUb2tlbklkXCI6OTIsXCJOYW1lXCI6XCJEZW1hbmQgU2NpZW5jZVwiLFwiRXhwaXJlc1wiOlwiMjAyNC0wMi0yOFQyMzo1OTowMFpcIixcIkFjY2Vzc0xldmVsXCI6MSxcIk1heE1pbnV0ZVwiOjYwMCxcIk1heERheVwiOjIwMDAwLFwiTWF4TW9udGhcIjoxMTAwMDAsXCJDbGllbnRLZXlcIjpcIjM3XzkyXCIsXCJEZWxldGVkXCI6ZmFsc2V9In0.T0539yki4TuqzTAf1h0XQN4Yz1eCn2Xn6cuCkJ2wzHs"
+        "Authorization": f"Bearer {IP_FLOW_TOKEN}"
     }
 
     # Send the request and save the response for each row in the table
@@ -88,7 +99,7 @@ def ip_api_search():
             # print('response code:', response.status_code)
 
             # Insert the response data into the table
-            cs.execute("INSERT INTO DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA (USER_IP, LAST_RESPONSE_CODE, LAST_QUERY_DATE, API_RESPONSE) VALUES (%s, %s, %s, %s)", 
+            cs.execute(f"INSERT INTO {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_OUTPUT_DATA (USER_IP, LAST_RESPONSE_CODE, LAST_QUERY_DATE, API_RESPONSE) VALUES (%s, %s, %s, %s)", 
             [ip_address, response.status_code, today, response.text])
         except ConnectionError as err:
             time.sleep(10)
@@ -102,30 +113,30 @@ def ip_api_search():
 
 
 snowflake_insert_input_data_query = [
-    """insert into DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_INPUT_DATA
+    f"""insert into {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_INPUT_DATA
 with mapped_ips as (
 select  DISTINCT BD.USER_IP 
  
-FROM DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY AS BD 
-INNER JOIN "FIVE_BY_FIVE_DEMO"."PRODUCTS"."IP_COMPANY_2_7_0" AS FBF 
+FROM {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY AS BD 
+INNER JOIN {FIVE_BY_FIVE_TABLE} AS FBF 
 ON IP_ADDRESS =  USER_IP
 
 UNION 
 
 select  DISTINCT BD.USER_IP 
-FROM DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY AS BD 
-INNER JOIN DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_DATA AS IPF 
+FROM {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY AS BD 
+INNER JOIN {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_DATA AS IPF 
 ON BD.USER_IP =  IPF.USER_IP
 WHERE IPF.LAST_RESPONSE_CODE = 200
 )
 , unmapped_ips as (
 select DISTINCT BD.USER_IP 
-FROM DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY AS BD 
+FROM {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY AS BD 
 where BD.USER_IP not in (select user_ip from mapped_ips)
 ) ,
 unmapped_ips_frequency as (
 select a.USER_IP, count(b.PAGE_URL) as frequency from unmapped_ips as a 
-left join DEV_BIDSTREAM.ACTIVITY.USER_ACTIVITY b 
+left join {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY b 
 on a.USER_IP = b.USER_IP
 group by a.USER_IP
 ),
@@ -140,7 +151,7 @@ select USER_IP from unmapped_ips_ranked where SPLIT_PART(USER_IP, '.', 4) = 0
 )
 select USER_IP from unmapped_ips_zero_deprioritized a
 where not exists  
-( select null from DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_DATA as b  
+( select null from {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_DATA as b  
 where a.USER_IP = b.USER_IP   
 and ( b.LAST_QUERY_DATE >= DATE( DATEADD(day, -30, GETDATE()) ) 
 and b.LAST_RESPONSE_CODE = 204 )  )
@@ -148,17 +159,17 @@ limit 3700;"""
     ]
 
 snowflake_insert_success_staging_query = [
-    """insert into DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA
-select * from DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA 
+    f"""insert into {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA
+select * from {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_OUTPUT_DATA 
 where last_response_code = 200;"""
     ]
 
 
 snowflake_merge_output_staging_query = [
-    """MERGE INTO DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_DATA as target_table
+    f"""MERGE INTO {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_DATA as target_table
 USING (select user_ip, min(last_response_code) as last_response_code,
        max(last_query_date) as last_query_date, any_value(api_response) as api_response 
-       from DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA 
+       from {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_OUTPUT_DATA 
       group by user_ip) as source_table
 ON (source_table.USER_IP = target_table.USER_IP)
 WHEN MATCHED THEN
@@ -176,10 +187,10 @@ WHEN NOT MATCHED THEN
     ]
 
 snowflake_merge_output_mappings_query = [
-    """MERGE INTO DEV_IP_FLOW.MAPPINGS.IP_FLOW_API_MAPPINGS as target_table
+    f"""MERGE INTO {IP_FLOW_DATABASE}.MAPPINGS.IP_FLOW_API_MAPPINGS as target_table
 USING (select user_ip, min(last_response_code) as last_response_code,
        max(last_query_date) as last_query_date, any_value(api_response) as api_response 
-       from DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
+       from {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
       group by user_ip) as source_table
 ON (source_table.USER_IP = target_table.USER_IP)
 WHEN MATCHED THEN
@@ -197,12 +208,12 @@ WHEN NOT MATCHED THEN
     ]
 
 merge_devmart_domain_observations_query = [
-    """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS as target_table
+    f"""MERGE INTO {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS as target_table
 USING 
 
 (SELECT DISTINCT USER_IP,MIN(LAST_RESPONSE_CODE) AS LAST_RESPONSE_CODE,
  MAX(LAST_QUERY_DATE) AS LAST_QUERY_DATE, ANY_VALUE(API_RESPONSE) AS API_RESPONSE, 'IP FLOW' AS SOURCE 
- FROM  DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
+ FROM  {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA 
 GROUP BY USER_IP) as source_table
 
 ON (source_table.USER_IP = target_table.IP AND source_table.SOURCE = target_table.SOURCE)
@@ -223,14 +234,14 @@ WHEN NOT MATCHED THEN
     ]
 
 snowflake_create_devmart_domain_query = [
-    """create or replace table "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN" as
+    f"""create or replace table {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as
 with most_recent as(
     select distinct
     ip,
     first_value(normalized_company_domain) over (partition by ip, source order by date desc) as latest_domain,
     source,
     source_confidence
-from "DEV_DATAMART"."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN_OBSERVATIONS"
+from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
 ),
 rolled_obs as (
     select
@@ -254,7 +265,7 @@ from rolled_obs;"""
     ]
 
 snowflake_normalize_loc_staging_query = [
-    """insert into dev_ip_flow.staging.normalized_location
+    f"""insert into {IP_FLOW_DATABASE}.staging.normalized_location
 with normalized_country as (
 
   select 
@@ -268,15 +279,15 @@ with normalized_country as (
   CASE WHEN PARSE_JSON(a.API_RESPONSE):location:countryCode::string = 'US' THEN 
   PARSE_JSON(a.API_RESPONSE):location:postalCode::string END as postal_code 
   
-  from DEV_IP_FLOW.MAPPINGS.IP_FLOW_API_MAPPINGS as a 
-  left join dev_ip_flow.raw_data.country_iso_codes as b
+  from {IP_FLOW_DATABASE}.MAPPINGS.IP_FLOW_API_MAPPINGS as a 
+  left join {IP_FLOW_DATABASE}.raw_data.country_iso_codes as b
   on PARSE_JSON(a.API_RESPONSE):location:countryCode::string = b.isocode_2
 ), 
 
 normalized_region as (
 select a.*, b.region_isocode_2
   from normalized_country as a 
-  left join dev_ip_flow.raw_data.usa_region as b
+  left join {IP_FLOW_DATABASE}.raw_data.usa_region as b
   on a.region_name = b.region_name
 )
 
@@ -291,12 +302,12 @@ from normalized_region;"""
 ]
 
 snowflake_merge_devmart_location_query = [
-    """MERGE INTO DEV_DATAMART.ENTITY_MAPPINGS.IP_TO_LOCATION as target_table
+    f"""MERGE INTO {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_LOCATION as target_table
 USING ( SELECT IP, MAX(DATE_UPDATED) AS DATE_UPDATED, ANY_VALUE(NORMALIZED_COUNTRY_CODE) AS NORMALIZED_COUNTRY_CODE, 
        ANY_VALUE(NORMALIZED_REGION_CODE) AS NORMALIZED_REGION_CODE, 
        ANY_VALUE(NORMALIZED_CITY_NAME) AS NORMALIZED_CITY_NAME, 
        ANY_VALUE(NORMALIZED_ZIP) AS NORMALIZED_ZIP
-       FROM DEV_IP_FLOW.STAGING.NORMALIZED_LOCATION 
+       FROM {IP_FLOW_DATABASE}.STAGING.NORMALIZED_LOCATION 
        GROUP BY IP ) as source_table
 ON (source_table.IP = target_table.IP)
 WHEN MATCHED THEN
@@ -319,10 +330,10 @@ WHEN NOT MATCHED THEN
 
 
 snowflake_cleanup_tables_query = [
-    """truncate table DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_INPUT_DATA;""",
-    """truncate table DEV_IP_FLOW.RAW_DATA.IP_FLOW_API_OUTPUT_DATA;""",
-    """truncate table DEV_IP_FLOW.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA;""",
-    """truncate table DEV_IP_FLOW.STAGING.NORMALIZED_LOCATION;"""
+    f"""truncate table {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_INPUT_DATA;""",
+    f"""truncate table {IP_FLOW_DATABASE}.RAW_DATA.IP_FLOW_API_OUTPUT_DATA;""",
+    f"""truncate table {IP_FLOW_DATABASE}.STAGING.IP_FLOW_API_OUTPUT_SUCCESS_DATA;""",
+    f"""truncate table {IP_FLOW_DATABASE}.STAGING.NORMALIZED_LOCATION;"""
 ]
 
 #----- begin DAG definition -------
