@@ -6,15 +6,23 @@ from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.contrib.hooks.snowflake_hook import SnowflakeHook
+from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# ---Variable definition--- #
-SNS_ARN = 'arn:aws:sns:us-east-2:698085094823:Intent_Scoring'
-DAG_NAME = 'Intent_Scoring'
-TRANSFORM_CONNECTION = "Airflow-Dev_Transform-connection"
-SCORE_DATE_GLOBAL_MIN = '2023-02-01'
+#-----Importing Variables----
+SNS_ARN=Variable.get("SNS_ARN")
+TRANSFORM_CONNECTION = Variable.get("TRANSFORM_CONNECTION")
+BIDSTREAM_DATABASE = Variable.get("BIDSTREAM_DATABASE")
+AIML_DATABASE = Variable.get("AIML_DATABASE")
+PIXEL_DATABASE = Variable.get("PIXEL_DATABASE")
+EMAIL_CAMPAIGNS_DATABASE = Variable.get("EMAIL_CAMPAIGNS_DATABASE")
+LEADSIFT_DATABASE = Variable.get("LEADSIFT_DATABASE")
 
+
+# ---Variable definition--- #
+DAG_NAME = 'Intent_Scoring'
+SCORE_DATE_GLOBAL_MIN = '2023-02-01'
 dt = datetime.now()
 date_time = dt.strftime("%m%d%Y%H:%M:%S")
 DOW = dt.weekday()
@@ -27,7 +35,7 @@ def on_failure_callback(context):
     op = SnsPublishOperator(
         task_id="dag_failure"
         ,target_arn=SNS_ARN
-        ,subject="DAG FAILED"
+        ,subject="INTENT_SCORING DAG FAILED"
         ,message=f"Task has failed, task_instance_key_str: {context['task_instance_key_str']}"
     )
     op.execute(context)
@@ -37,12 +45,11 @@ def on_success_callback(context):
     op = SnsPublishOperator(
         task_id="dag_success"
         ,target_arn=SNS_ARN
-        ,subject="DAG Success"
+        ,subject="INTENT_SCORING DAG SUCCESs"
         ,message=f"{DAG_NAME} has succeeded, run_id: {context['run_id']}"
     )
     op.execute(context)
     
-TRANSFORM_CONN = "Airflow-Dev_Transform-connection"
 
 dag = DAG(DAG_NAME, start_date = datetime(2022, 12, 7), schedule_interval = '@weekly', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'depends_on_past' : False,'retries' : 0,'on_failure_callback': on_failure_callback,'on_success_callback': None})
@@ -54,7 +61,7 @@ def quote_wrap(s):
 def get_min_score_date(snow_hook):
     date_format = '%Y-%m-%d'
     global_min = datetime.strptime(SCORE_DATE_GLOBAL_MIN, date_format).date()
-    min_cache_result = snow_hook.get_first("select min(date) from DEV_BIDSTREAM.ACTIVITY.PRESCORING_CACHE")
+    min_cache_result = snow_hook.get_first(f"select min(date) from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE")
     print("query result: ",min_cache_result)
     min_cache_date = min_cache_result[0]
     if min_cache_date is None:
@@ -98,9 +105,9 @@ def intent_scoring_backfill():
 # ---- SNOWFLAKE QUERIES ----
 def scoring_input_cache_without_join(lookback_date):
     query = f"""
-    create or replace table dev_aiml.intent_scoring.input_cache as
+    create or replace table {AIML_DATABASE}.intent_scoring.input_cache as
   with subset as (
-  select * from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING"
+  select * from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING
   where (title_output:"BUSINESS">=0.8 or title_output:"BUSINESS NEWS">=0.4 or title_output:"SCIENCE TECH NEWS">=0.55)
   and date >= date({lookback_date}) 
   and date < current_date), 
@@ -177,7 +184,7 @@ def scoring_input_cache_without_join(lookback_date):
         sum(t.unique_devices) as unique_devices,
         sum(t.unique_ips) as unique_ips
         -- table definition
-        from "DEV_PIXEL"."ACTIVITY"."PRESCORING" t,
+        from {PIXEL_DATABASE}.ACTIVITY.PRESCORING t,
         lateral flatten(input=>t.intent_topics) f
         where date >= date({lookback_date})
         and date < current_date 
@@ -205,7 +212,7 @@ def scoring_input_cache_without_join(lookback_date):
         ifnull(b.unique_pubs,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pubs
     from bidstream b
     --join to email
-    full outer join (select * from "DEV_EMAIL_CAMPAIGNS"."ACTIVITY"."PRESCORING"
+    full outer join (select * from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.PRESCORING
                      where date >= date({lookback_date})
                      and date < current_date) e
     on b.normalized_company_domain = e.normalized_company_domain
@@ -214,7 +221,7 @@ def scoring_input_cache_without_join(lookback_date):
     and b.topic = e.topic
     and b.date = e.date
     --join to leadisft
-    full outer join (select * from "DEV_LEADSIFT"."ACTIVITY"."PRESCORING"
+    full outer join (select * from {LEADSIFT_DATABASE}.ACTIVITY.PRESCORING
                      where date >= date({lookback_date})
                      and date < current_date) l
     on b.normalized_company_domain = l.normalized_company_domain
@@ -265,16 +272,16 @@ def scoring_input_cache_without_join(lookback_date):
 
 def scoring_input_cache_with_join(lookback_date):
     query = f"""
-    create or replace table dev_aiml.intent_scoring.input_cache as (
+    create or replace table {AIML_DATABASE}.intent_scoring.input_cache as (
   with subset as (
-  select t.* from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING" t
+  select t.* from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING t
   join (select distinct 
                 normalized_company_domain,
                 normalized_country_code,
                 normalized_region_code,
                 normalized_city_name,
                 normalized_zip
-              from "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING_CACHE" ) a
+              from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE ) a
         on t.normalized_company_domain = a.normalized_company_domain
         and t.normalized_country_code = a.normalized_country_code
         and t.normalized_region_code = a.normalized_region_code
@@ -353,10 +360,10 @@ def scoring_input_cache_with_join(lookback_date):
 
 def scoring_query(score_date):
     query = f"""
-    merge into "DEV_AIML"."INTENT_SCORING"."OUTPUT_CACHE" t
+    merge into {AIML_DATABASE}.INTENT_SCORING.OUTPUT_CACHE t
    using (
       with lookback_input_cache as (
-      select * from "DEV_AIML"."INTENT_SCORING"."INPUT_CACHE"
+      select * from {AIML_DATABASE}.INTENT_SCORING.INPUT_CACHE
       where date >= dateadd(day, -91, date({score_date}))
       and date < date({score_date})),
     
@@ -522,9 +529,9 @@ def scoring_query(score_date):
     """
     return query
 
-historical_merge_query = ["""
-merge into dev_aiml.intent_scoring.intent_scores_historical t
-using dev_aiml.intent_scoring.output_cache s
+historical_merge_query = [f"""
+merge into {AIML_DATABASE}.intent_scoring.intent_scores_historical t
+using {AIML_DATABASE}.intent_scoring.output_cache s
   on t.normalized_company_domain = s.normalized_company_domain
   and t.parent_category = s.parent_category
   and t.category = s.category
@@ -554,21 +561,21 @@ using dev_aiml.intent_scoring.output_cache s
   intent_score = s.intent_score;
 """]
 
-clear_bidstream_prescoring_cache_query = ["""
-truncate table dev_bidstream.activity.prescoring_cache;
+clear_bidstream_prescoring_cache_query = [f"""
+truncate table {BIDSTREAM_DATABASE}.activity.prescoring_cache;
 """]
 
-clear_pixel_prescoring_cache_query = ["""
-truncate table dev_pixel.activity.prescoring_cache;
+clear_pixel_prescoring_cache_query = [f"""
+truncate table {PIXEL_DATABASE}.activity.prescoring_cache;
 """]
 
-clear_scoring_output_cache_query = ["""
-truncate table "DEV_AIML"."INTENT_SCORING"."OUTPUT_CACHE";
+clear_scoring_output_cache_query = [f"""
+truncate table {AIML_DATABASE}.INTENT_SCORING.OUTPUT_CACHE;
 """]
 
-bidstream_prescoring_cache_to_cumulative_query = ["""
-merge into "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING" t
- using "DEV_BIDSTREAM"."ACTIVITY"."PRESCORING_CACHE" s
+bidstream_prescoring_cache_to_cumulative_query = [f"""
+merge into {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING t
+ using {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE s
  on s.page_url = t.page_url
 and s.normalized_company_domain = t.normalized_company_domain
 and s.date = t.date
@@ -627,9 +634,9 @@ when not matched then insert
  information_type = s.information_type;
 """]
 
-pixel_prescoring_cache_to_cumulative_query = ["""
-merge into "DEV_PIXEL"."ACTIVITY"."PRESCORING" t
- using "DEV_PIXEL"."ACTIVITY"."PRESCORING_CACHE" s
+pixel_prescoring_cache_to_cumulative_query = [f"""
+merge into {PIXEL_DATABASE}.ACTIVITY.PRESCORING t
+ using {PIXEL_DATABASE}.ACTIVITY.PRESCORING_CACHE s
  on s.page_url = t.page_url
 and s.normalized_company_domain = t.normalized_company_domain
 and s.date = t.date
