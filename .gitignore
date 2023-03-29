@@ -4,4 +4,5 @@ plugins/
 dev-airflow-standalone-server.pem
 intent-dev-ec2-key.pem
 intent-staging-ec2-key.pem
+intent-prod-ec2-key.pem
 .DS_Store
