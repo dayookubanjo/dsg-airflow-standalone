@@ -3,6 +3,7 @@ from datetime import datetime
 from airflow import DAG
 from airflow.contrib.operators.snowflake_operator import SnowflakeOperator
 from airflow.providers.amazon.aws.operators.sns import SnsPublishOperator
+from airflow.operators.python_operator import PythonOperator
 from airflow.models import Variable
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
@@ -38,8 +39,12 @@ def on_success_callback(context):
     )
     op.execute(context)
 
+def end_success():
+  logger.info("DAG Ended Successfully.")
+
 dag = DAG('Pixel_Data_Processing', start_date = datetime(2022, 10, 29), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'on_failure_callback': on_failure_callback,'on_success_callback': None})
+
 
 #-----Snowflake queries----
 
@@ -212,8 +217,9 @@ when not matched then insert
 values(S.PAGE_URL,S.PUBLISHER_DOMAIN_NORMALIZED,S.NORMALIZED_COMPANY_DOMAIN,S.DATE,S.NORMALIZED_COUNTRY_CODE,S.NORMALIZED_REGION_CODE,S.NORMALIZED_CITY_NAME,S.NORMALIZED_ZIP,S.PAGEVIEWS,S.WEIGHTED_PAGEVIEWS,S.UNIQUE_DEVICES,S.UNIQUE_IPS);
 """]
 #-----Pre-scoring-----
-merge_insert_prescoring_cache=[f"""merge into {PIXEL_DATABASE}.activity.prescoring_cache t
-using (
+enriched_company_activity_cache = [f"""
+-- create table that will be used to merge into the prescoring cache and delete from the company activity cache
+create or replace transient table {PIXEL_DATABASE}.activity.enriched_company_activity_cache as
 select activity.*,
         taxo.intent_topics,
         context.context as context_output,
@@ -221,48 +227,124 @@ select activity.*,
         title.url_type,
         title.activity_type,
         title.information_type
-    from {PIXEL_DATABASE}.activity.company_activity activity
-    join {AIML_DATABASE}.taxonomy_classifier.output taxo
+    from {PIXEL_DATABASE}.activity.company_activity_cache activity
+    join {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
     on activity.page_url = taxo.page_url
-    join {AIML_DATABASE}.context_classifier.output context
+    join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
     on activity.page_url = context.page_url
-    join {AIML_DATABASE}.title_classifier.output title
-    on activity.page_url = title.page_url)s
-on t.page_url=s.page_url
+    join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
+    on activity.page_url = title.page_url;
+
+"""]
+
+merge_insert_prescoring_cache=[f"""merge into {PIXEL_DATABASE}.activity.prescoring_cache t
+using (
+  -- flatten enriched_company_activity_cache
+  select
+        -- rollup cols
+        t.normalized_company_domain,
+        f.value:"parentCategory"::varchar as parent_category,
+        f.value:"category"::varchar as category,
+        f.value:"topic"::varchar as topic,
+        t.normalized_country_code,
+        t.normalized_region_code,
+        t.normalized_city_name,
+        t.normalized_zip,
+        t.date,
+        -- feature cols
+        sum(t.pageviews) as pageviews,
+        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
+        1.0 as avg_page_relevance,
+        100 as activity_type_score,
+        100 as information_type_score,
+        sum(t.context_output:"review/comparison") as review_pageviews,
+        count(distinct t.page_url) as unique_pages,
+        count(distinct t.publisher_domain_normalized) as unique_pubs,
+        sum(t.unique_devices) as unique_devices,
+        sum(t.unique_ips) as unique_ips
+        -- table definition
+        from {PIXEL_DATABASE}.activity.enriched_company_activity_cache t,
+        lateral flatten(input=>t.intent_topics) f
+        group by 1,2,3,4,5,6,7,8,9
+) s
+on t.parent_category = s.category
+and t.category = s.category
+and t.topic = s.category
 and t.normalized_company_domain=s.normalized_company_domain
 and t.date=s.date
-and t.normalized_country_code=s.normalized_country_code
+and equal_null(t.normalized_country_code,s.normalized_country_code)=true
 and equal_null(t.normalized_region_code,s.normalized_region_code)=true
 and equal_null(t.normalized_city_name,s.normalized_city_name)=true
 and equal_null(t.normalized_zip,s.normalized_zip)=true
 when matched then update set
-publisher_domain_normalized = s.publisher_domain_normalized,
-pageviews = s.pageviews,
-weighted_pageviews =  s.weighted_pageviews,
-unique_devices = s.unique_devices,
-unique_ips = s.unique_ips,
-intent_topics = s.intent_topics,
-context_output = s.context_output,
-title_output = s.title_output,
-url_type = s.url_type,
-activity_type = s.activity_type,
-information_type = s.information_type
+pageviews = s.pageviews + t.pageviews,
+weighted_pageviews = s.weighted_pageviews + t.weighted_pageviews,
+avg_page_relevance = 1.0,
+activity_type_score = 100,
+information_type_score = 100,
+review_pageviews = s.review_pageviews + t.review_pageviews,
+unique_pages = s.unique_pages + t.unique_pages,
+unique_pubs = s.unique_pubs + t.unique_pubs,
+unique_devices = s.unique_devices + t.unique_devices,
+unique_ips = s.unique_ips + t.unique_ips
 when not matched then insert
-(page_url,publisher_domain_normalized,normalized_company_domain,date,normalized_country_code,normalized_region_code,normalized_city_name,normalized_zip,pageviews,weighted_pageviews,unique_devices,unique_ips,intent_topics,context_output,title_output,url_type,activity_type,information_type)
+(normalized_company_domain,
+parent_category,
+category,
+topic,
+normalized_country_code,
+normalized_region_code,
+normalized_city_name,
+normalized_zip,
+date,
+pageviews,
+weighted_pageviews,
+avg_page_relevance,
+activity_type_score,
+information_type_score,
+review_pageviews,
+unique_pages,
+unique_pubs,
+unique_devices,
+unique_ips
+)
  values
-(s.page_url,s.publisher_domain_normalized,s.normalized_company_domain,s.date,s.normalized_country_code,s.normalized_region_code,s.normalized_city_name,s.normalized_zip,s.pageviews,s.weighted_pageviews,s.unique_devices,s.unique_ips,s.intent_topics,s.context_output,s.title_output,s.url_type,s.activity_type,s.information_type)
+(s.normalized_company_domain,
+s.parent_category,
+s.category,
+s.topic,
+s.normalized_country_code,
+s.normalized_region_code,
+s.normalized_city_name,
+s.normalized_zip,
+s.date,
+s.pageviews,
+s.weighted_pageviews,
+s.avg_page_relevance,
+s.activity_type_score,
+s.information_type_score,
+s.review_pageviews,
+s.unique_pages,
+s.unique_pubs,
+s.unique_devices,
+s.unique_ips
+)
 ;"""]
 
-#-----Delete from Company_activity_cache-----
+#-----Delete from caches-----
 delete_from_company_activity_cache=[f"""delete from {PIXEL_DATABASE}.activity.company_activity_cache a
-using {PIXEL_DATABASE}.activity.prescoring_cache b
+using {PIXEL_DATABASE}.activity.enriched_company_activity_cache b
 where a.page_url=b.page_url
 and a.NORMALIZED_COMPANY_DOMAIN=b.NORMALIZED_COMPANY_DOMAIN
 and a.date=b.date
-and a.NORMALIZED_COUNTRY_CODE=b.NORMALIZED_COUNTRY_CODE
+and equal_null(a.NORMALIZED_COUNTRY_CODE,b.NORMALIZED_COUNTRY_CODE)=true
 and equal_null(a.normalized_region_code,b.normalized_region_code)=true
 and equal_null(a.normalized_city_name,b.normalized_city_name)=true
 and equal_null(a.normalized_zip,b.normalized_zip)= true;"""]
+
+clear_enriched_company_activity_cache = [f"""
+truncate table {PIXEL_DATABASE}."ACTIVITY"."ENRICHED_COMPANY_ACTIVITY_CACHE";
+"""]
  
 with dag:
   copy_query_exec = SnowflakeOperator(
@@ -312,6 +394,12 @@ with dag:
     sql= merge_insert_company_activity,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
+
+  enriched_company_activity_cache_exec = SnowflakeOperator(
+    task_id= "enriched_company_activity_cache",
+    sql= enriched_company_activity_cache,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
   
   merge_into_prescoring_cache_exec = SnowflakeOperator(
     task_id= "merge_into_prescoring_cache",
@@ -321,8 +409,24 @@ with dag:
   
   delete_from_company_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_company_activity_cache",
-    on_success_callback=on_success_callback,
     sql= delete_from_company_activity_cache,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
-  copy_query_exec >> merge_into_user_activity_exec  >> clear_raw_data_cache_exec >> merge_into_unique_urls_exec >> merge_into_WebScraper_input_cache_exec >> merge_into_Digital_element_observation_exec >> merge_into_company_activity_cache_exec >> merge_into_company_activity_exec >> merge_into_prescoring_cache_exec >> delete_from_company_activity_cache_exec
+  
+  clear_enriched_company_activity_cache_exec = SnowflakeOperator(
+    task_id= "clear_enriched_company_activity_cache",
+    sql= clear_enriched_company_activity_cache,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+  
+  end_success_exec = PythonOperator(
+    task_id= "end_success",
+    python_callable = end_success,
+    on_success_callback = on_success_callback
+    )
+  
+
+  copy_query_exec >> merge_into_user_activity_exec  >> clear_raw_data_cache_exec >> merge_into_unique_urls_exec >> merge_into_WebScraper_input_cache_exec
+  merge_into_WebScraper_input_cache_exec >> merge_into_Digital_element_observation_exec >> merge_into_company_activity_cache_exec >> merge_into_company_activity_exec
+  merge_into_company_activity_exec >> enriched_company_activity_cache_exec >>  merge_into_prescoring_cache_exec
+  merge_into_prescoring_cache_exec >> delete_from_company_activity_cache_exec >> clear_enriched_company_activity_cache_exec >> end_success_exec
