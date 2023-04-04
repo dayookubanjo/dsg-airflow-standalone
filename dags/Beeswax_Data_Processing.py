@@ -471,95 +471,144 @@ where date in (select distinct date from {BIDSTREAM_DATABASE}.activity.company_a
 """]
 
 # --- PRESCORING ---- #
-prescoring_cache_query = [f"""
-merge into {BIDSTREAM_DATABASE}.activity.prescoring_cache t
-using (
-    select
-        activity.*,
+enriched_company_activity_cache_query = [f"""
+create or replace transient table {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache as
+select activity.*,
         taxo.intent_topics,
         context.context as context_output,
         title.topics as title_output,
         title.url_type,
         title.activity_type,
         title.information_type
-    from {BIDSTREAM_DATABASE}.ACTIVITY.COMPANY_ACTIVITY_CACHE activity
-    join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT taxo
+    from {BIDSTREAM_DATABASE}.activity.company_activity_cache activity
+    join {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
     on activity.page_url = taxo.page_url
-    join {AIML_DATABASE}.CONTEXT_CLASSIFIER.OUTPUT context
+    join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
     on activity.page_url = context.page_url
-    join {AIML_DATABASE}.TITLE_CLASSIFIER.OUTPUT title
-    on activity.page_url = title.page_url) s
-on s.page_url = t.page_url
-and s.normalized_company_domain = t.normalized_company_domain
-and s.date = t.date
-and s.normalized_country_code = t.normalized_country_code
-and s.normalized_region_code = t.normalized_region_code
-and s.normalized_city_name = t.normalized_city_name
-and s.normalized_zip = t.normalized_zip
-when not matched then insert
-(page_url, 
- publisher_domain_normalized,
- normalized_company_domain,
- date,
- normalized_country_code,
- normalized_region_code,
- normalized_city_name,
- normalized_zip,
- pageviews,
- weighted_pageviews,
- unique_devices,
- unique_ips,
- intent_topics,
- context_output,
- title_output,
- url_type,
- activity_type,
- information_type)
- values
- (s.page_url, 
- s.publisher_domain_normalized,
- s.normalized_company_domain,
- s.date,
- s.normalized_country_code,
- s.normalized_region_code,
- s.normalized_city_name,
- s.normalized_zip,
- s.pageviews,
- s.weighted_pageviews,
- s.unique_devices,
- s.unique_ips,
- s.intent_topics,
- s.context_output,
- s.title_output,
- s.url_type,
- s.activity_type,
- s.information_type)
- when matched then update set
- publisher_domain_normalized = s.publisher_domain_normalized,
- pageviews = s.pageviews,
- weighted_pageviews =  s.weighted_pageviews,
- unique_devices = s.unique_devices,
- unique_ips = s.unique_ips,
- intent_topics = s.intent_topics,
- context_output = s.context_output,
- title_output = s.title_output,
- url_type = s.url_type,
- activity_type = s.activity_type,
- information_type = s.information_type;
+    join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
+    on activity.page_url = title.page_url;
 """]
 
-
+prescoring_cache_query = [f"""
+merge into {BIDSTREAM_DATABASE}.activity.prescoring_cache t
+using (
+  -- flatten enriched_company_activity_cache
+  select
+        -- rollup cols
+        t.normalized_company_domain,
+        f.value:"parentCategory"::varchar as parent_category,
+        f.value:"category"::varchar as category,
+        f.value:"topic"::varchar as topic,
+        t.normalized_country_code,
+        t.normalized_region_code,
+        t.normalized_city_name,
+        t.normalized_zip,
+        t.date,
+        -- feature cols
+        sum(t.pageviews) as pageviews,
+        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
+        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
+        avg(case activity_type
+              when 'downloading' then 100
+              when 'reading' then 85
+              when 'visiting' then 50
+              when 'executing' then 10
+              when 'contacting' then 10
+              else 5 end) as activity_type_score,
+        avg(case information_type
+              when 'informational' then 100
+              when 'transactional' then 75
+              when 'navigational' then 25
+              else 5 end) as information_type_score,
+        sum(t.context_output:"review/comparison") as review_pageviews,
+        count(distinct t.page_url) as unique_pages,
+        count(distinct t.publisher_domain_normalized) as unique_pubs,
+        sum(t.unique_devices) as unique_devices,
+        sum(t.unique_ips) as unique_ips
+        -- table definition
+        from {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache t,
+        lateral flatten(input=>t.intent_topics) f
+        group by 1,2,3,4,5,6,7,8,9
+) s
+on t.parent_category = s.category
+and t.category = s.category
+and t.topic = s.category
+and t.normalized_company_domain=s.normalized_company_domain
+and t.date=s.date
+and equal_null(t.normalized_country_code,s.normalized_country_code)=true
+and equal_null(t.normalized_region_code,s.normalized_region_code)=true
+and equal_null(t.normalized_city_name,s.normalized_city_name)=true
+and equal_null(t.normalized_zip,s.normalized_zip)=true
+when matched then update set
+pageviews = s.pageviews + t.pageviews,
+weighted_pageviews = s.weighted_pageviews + t.weighted_pageviews,
+avg_page_relevance = (s.avg_page_relevance*s.pageviews + t.avg_page_relevance*t.pageviews)/(s.pageviews + t.pageviews),
+activity_type_score = (s.activity_type_score*s.pageviews + t.activity_type_score*t.pageviews)/(s.pageviews + t.pageviews),
+information_type_score = (s.information_type_score*s.pageviews + t.information_type_score*t.pageviews)/(s.pageviews + t.pageviews),
+review_pageviews = s.review_pageviews + t.review_pageviews,
+unique_pages = s.unique_pages + t.unique_pages,
+unique_pubs = s.unique_pubs + t.unique_pubs,
+unique_devices = s.unique_devices + t.unique_devices,
+unique_ips = s.unique_ips + t.unique_ips
+when not matched then insert
+(normalized_company_domain,
+parent_category,
+category,
+topic,
+normalized_country_code,
+normalized_region_code,
+normalized_city_name,
+normalized_zip,
+date,
+pageviews,
+weighted_pageviews,
+avg_page_relevance,
+activity_type_score,
+information_type_score,
+review_pageviews,
+unique_pages,
+unique_pubs,
+unique_devices,
+unique_ips
+)
+ values
+(s.normalized_company_domain,
+s.parent_category,
+s.category,
+s.topic,
+s.normalized_country_code,
+s.normalized_region_code,
+s.normalized_city_name,
+s.normalized_zip,
+s.date,
+s.pageviews,
+s.weighted_pageviews,
+s.avg_page_relevance,
+s.activity_type_score,
+s.information_type_score,
+s.review_pageviews,
+s.unique_pages,
+s.unique_pubs,
+s.unique_devices,
+s.unique_ips
+)
+;
+"""]
 
 delete_from_company_activity_cache_query = [f"""
-delete from {BIDSTREAM_DATABASE}.ACTIVITY.COMPANY_ACTIVITY_CACHE a
- using {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE b
- where a.page_url = b.page_url
- and a.normalized_company_domain = b.normalized_company_domain
- and a.date = b.date
- and a.normalized_country_code = b.normalized_country_code
- and a.normalized_region_code = b.normalized_region_code
- and a.normalized_city_name = b.normalized_city_name
- and a.normalized_zip = b.normalized_zip;
+delete from {BIDSTREAM_DATABASE}.activity.company_activity_cache a
+using {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache b
+where a.page_url=b.page_url
+and a.NORMALIZED_COMPANY_DOMAIN=b.NORMALIZED_COMPANY_DOMAIN
+and a.date=b.date
+and equal_null(a.NORMALIZED_COUNTRY_CODE,b.NORMALIZED_COUNTRY_CODE)=true
+and equal_null(a.normalized_region_code,b.normalized_region_code)=true
+and equal_null(a.normalized_city_name,b.normalized_city_name)=true
+and equal_null(a.normalized_zip,b.normalized_zip)= true;
+"""]
+
+clear_enriched_company_activity_cache_query = [f"""
+truncate table {BIDSTREAM_DATABASE}."ACTIVITY"."ENRICHED_COMPANY_ACTIVITY_CACHE";
 """]
 
 # ---- UNIQUE URLS ---- #
@@ -739,17 +788,27 @@ with dag:
     )
 
     # --- PRESCORING --- #
+    enriched_company_activity_cache_exec = SnowflakeOperator(
+    task_id= "enriched_company_activity_cache",
+    sql= enriched_company_activity_cache_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
     prescoring_cache_exec = SnowflakeOperator(
     task_id= "prescoring_cache",
     sql= prescoring_cache_query,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
-    
-
     delete_from_company_activity_cache_exec = SnowflakeOperator(
     task_id= "delete_from_company_activity_cache",
     sql= delete_from_company_activity_cache_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
+    clear_enriched_company_activity_cache_exec = SnowflakeOperator(
+    task_id= "clear_enriched_company_activity_cache",
+    sql= clear_enriched_company_activity_cache_query,
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
@@ -793,7 +852,7 @@ with dag:
     user_activity_exec >> bidstream_ip_mappings_exec >> datamart_ip_loc_mappings_exec >> de_ip_domain_obs_exec >> datamart_ip_domain_mappings_exec
     datamart_ip_domain_mappings_exec >> bitoid_to_ip_cache_exec >> bitoid_to_domain_obs_exec >> bitoid_to_domain_map_exec >> company_activity_exec
     company_activity_exec >> unique_urls_exec >> web_scraper_input_cache_exec
-    company_activity_exec >> prescoring_cache_exec
+    company_activity_exec >> enriched_company_activity_cache_exec >> prescoring_cache_exec
     
     #cache -> cumulative map
     user_activity_exec >> user_activity_cache_to_cumulative_exec
@@ -807,8 +866,10 @@ with dag:
     [bitoid_to_ip_cache_to_obs_exec, bitoid_to_domain_obs_exec] >> clear_bitoid_to_ip_cache_exec
     [unique_urls_cache_to_cumulative_exec, web_scraper_input_cache_exec] >> delete_from_unique_urls_cache_exec
     [company_activity_cache_to_cumulative_exec, prescoring_cache_exec, unique_urls_exec] >> delete_from_company_activity_cache_exec
+    prescoring_cache_exec >> clear_enriched_company_activity_cache_exec
 
     #end success logic
 
     [delete_from_company_activity_cache_exec, bidstream_ip_mappings_cache_to_cumulative_exec, 
-    delete_from_user_activity_cache_exec, delete_from_unique_urls_cache_exec, clear_bitoid_to_ip_cache_exec] >> end_success_exec
+    delete_from_user_activity_cache_exec, delete_from_unique_urls_cache_exec, clear_bitoid_to_ip_cache_exec,
+    clear_enriched_company_activity_cache_exec] >> end_success_exec
