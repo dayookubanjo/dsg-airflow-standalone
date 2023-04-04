@@ -574,125 +574,138 @@ truncate table {AIML_DATABASE}.INTENT_SCORING.OUTPUT_CACHE;
 """]
 
 bidstream_prescoring_cache_to_cumulative_query = [f"""
-merge into {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING t
- using {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE s
- on s.page_url = t.page_url
-and s.normalized_company_domain = t.normalized_company_domain
-and s.date = t.date
-and s.normalized_country_code = t.normalized_country_code
-and s.normalized_region_code = t.normalized_region_code
-and s.normalized_city_name = t.normalized_city_name
-and s.normalized_zip = t.normalized_zip
+merge into {BIDSTREAM_DATABASE}.activity.prescoring t
+using {BIDSTREAM_DATABASE}.activity.prescoring_cache s
+on t.parent_category = s.category
+and t.category = s.category
+and t.topic = s.category
+and t.normalized_company_domain=s.normalized_company_domain
+and t.date=s.date
+and equal_null(t.normalized_country_code,s.normalized_country_code)=true
+and equal_null(t.normalized_region_code,s.normalized_region_code)=true
+and equal_null(t.normalized_city_name,s.normalized_city_name)=true
+and equal_null(t.normalized_zip,s.normalized_zip)=true
+when matched then update set
+pageviews = s.pageviews + t.pageviews,
+weighted_pageviews = s.weighted_pageviews + t.weighted_pageviews,
+avg_page_relevance = (s.avg_page_relevance*s.pageviews + t.avg_page_relevance*t.pageviews)/(s.pageviews + t.pageviews),
+activity_type_score = (s.activity_type_score*s.pageviews + t.activity_type_score*t.pageviews)/(s.pageviews + t.pageviews),
+information_type_score = (s.information_type_score*s.pageviews + t.information_type_score*t.pageviews)/(s.pageviews + t.pageviews),
+review_pageviews = s.review_pageviews + t.review_pageviews,
+unique_pages = s.unique_pages + t.unique_pages,
+unique_pubs = s.unique_pubs + t.unique_pubs,
+unique_devices = s.unique_devices + t.unique_devices,
+unique_ips = s.unique_ips + t.unique_ips
 when not matched then insert
-(page_url, 
- publisher_domain_normalized,
- normalized_company_domain,
- date,
- normalized_country_code,
- normalized_region_code,
- normalized_city_name,
- normalized_zip,
- pageviews,
- weighted_pageviews,
- unique_devices,
- unique_ips,
- intent_topics,
- context_output,
- title_output,
- url_type,
- activity_type,
- information_type)
+(normalized_company_domain,
+parent_category,
+category,
+topic,
+normalized_country_code,
+normalized_region_code,
+normalized_city_name,
+normalized_zip,
+date,
+pageviews,
+weighted_pageviews,
+avg_page_relevance,
+activity_type_score,
+information_type_score,
+review_pageviews,
+unique_pages,
+unique_pubs,
+unique_devices,
+unique_ips
+)
  values
- (s.page_url, 
- s.publisher_domain_normalized,
- s.normalized_company_domain,
- s.date,
- s.normalized_country_code,
- s.normalized_region_code,
- s.normalized_city_name,
- s.normalized_zip,
- s.pageviews,
- s.weighted_pageviews,
- s.unique_devices,
- s.unique_ips,
- s.intent_topics,
- s.context_output,
- s.title_output,
- s.url_type,
- s.activity_type,
- s.information_type)
- when matched then update set
- publisher_domain_normalized = s.publisher_domain_normalized,
- pageviews = s.pageviews,
- unique_devices = s.unique_devices,
- unique_ips = s.unique_ips,
- intent_topics = s.intent_topics,
- context_output = s.context_output,
- title_output = s.title_output,
- url_type = s.url_type,
- activity_type = s.activity_type,
- information_type = s.information_type;
+(s.normalized_company_domain,
+s.parent_category,
+s.category,
+s.topic,
+s.normalized_country_code,
+s.normalized_region_code,
+s.normalized_city_name,
+s.normalized_zip,
+s.date,
+s.pageviews,
+s.weighted_pageviews,
+s.avg_page_relevance,
+s.activity_type_score,
+s.information_type_score,
+s.review_pageviews,
+s.unique_pages,
+s.unique_pubs,
+s.unique_devices,
+s.unique_ips
+)
+;
 """]
 
 pixel_prescoring_cache_to_cumulative_query = [f"""
-merge into {PIXEL_DATABASE}.ACTIVITY.PRESCORING t
- using {PIXEL_DATABASE}.ACTIVITY.PRESCORING_CACHE s
- on s.page_url = t.page_url
-and s.normalized_company_domain = t.normalized_company_domain
-and s.date = t.date
-and s.normalized_country_code = t.normalized_country_code
-and s.normalized_region_code = t.normalized_region_code
-and s.normalized_city_name = t.normalized_city_name
-and s.normalized_zip = t.normalized_zip
+merge into {PIXEL_DATABASE}.activity.prescoring t
+using {PIXEL_DATABASE}.activity.prescoring_cache s
+on t.parent_category = s.category
+and t.category = s.category
+and t.topic = s.category
+and t.normalized_company_domain=s.normalized_company_domain
+and t.date=s.date
+and equal_null(t.normalized_country_code,s.normalized_country_code)=true
+and equal_null(t.normalized_region_code,s.normalized_region_code)=true
+and equal_null(t.normalized_city_name,s.normalized_city_name)=true
+and equal_null(t.normalized_zip,s.normalized_zip)=true
+when matched then update set
+pageviews = s.pageviews + t.pageviews,
+weighted_pageviews = s.weighted_pageviews + t.weighted_pageviews,
+avg_page_relevance = 1.0,
+activity_type_score = 100,
+information_type_score = 100,
+review_pageviews = s.review_pageviews + t.review_pageviews,
+unique_pages = s.unique_pages + t.unique_pages,
+unique_pubs = s.unique_pubs + t.unique_pubs,
+unique_devices = s.unique_devices + t.unique_devices,
+unique_ips = s.unique_ips + t.unique_ips
 when not matched then insert
-(page_url, 
- publisher_domain_normalized,
- normalized_company_domain,
- date,
- normalized_country_code,
- normalized_region_code,
- normalized_city_name,
- normalized_zip,
- pageviews,
- weighted_pageviews,
- unique_devices,
- unique_ips,
- intent_topics,
- context_output,
- title_output,
- url_type,
- activity_type,
- information_type)
+(normalized_company_domain,
+parent_category,
+category,
+topic,
+normalized_country_code,
+normalized_region_code,
+normalized_city_name,
+normalized_zip,
+date,
+pageviews,
+weighted_pageviews,
+avg_page_relevance,
+activity_type_score,
+information_type_score,
+review_pageviews,
+unique_pages,
+unique_pubs,
+unique_devices,
+unique_ips
+)
  values
- (s.page_url, 
- s.publisher_domain_normalized,
- s.normalized_company_domain,
- s.date,
- s.normalized_country_code,
- s.normalized_region_code,
- s.normalized_city_name,
- s.normalized_zip,
- s.pageviews,
- s.weighted_pageviews,
- s.unique_devices,
- s.unique_ips,
- s.intent_topics,
- s.context_output,
- s.title_output,
- s.url_type,
- s.activity_type,
- s.information_type)
- when matched then update set
- publisher_domain_normalized = s.publisher_domain_normalized,
- pageviews = s.pageviews,
- unique_devices = s.unique_devices,
- unique_ips = s.unique_ips,
- intent_topics = s.intent_topics,
- context_output = s.context_output,
- title_output = s.title_output,
- url_type = s.url_type,
- activity_type = s.activity_type,
- information_type = s.information_type;
+(s.normalized_company_domain,
+s.parent_category,
+s.category,
+s.topic,
+s.normalized_country_code,
+s.normalized_region_code,
+s.normalized_city_name,
+s.normalized_zip,
+s.date,
+s.pageviews,
+s.weighted_pageviews,
+s.avg_page_relevance,
+s.activity_type_score,
+s.information_type_score,
+s.review_pageviews,
+s.unique_pages,
+s.unique_pubs,
+s.unique_devices,
+s.unique_ips
+)
 """]
 
 with dag:
