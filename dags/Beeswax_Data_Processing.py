@@ -50,7 +50,7 @@ dag = DAG('Beeswax_Channel', start_date = datetime(2022, 12, 7), schedule_interv
 
 # ---- USER ACTIVITY ---- #
 user_activity_query = [
-f"""
+"""
 set raw_bidstream_watermark = (SELECT CONVERT_TIMEZONE('America/Atikokan', CURRENT_TIMESTAMP()));
 """,
 f"""
