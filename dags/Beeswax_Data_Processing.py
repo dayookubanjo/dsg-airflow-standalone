@@ -78,12 +78,23 @@ group by 1,3,4,5,6,7,8,9;
 """delete from "DEV_BIDSTREAM"."RAW_DATA"."AUCTION_LOGS" where bid_time <= $raw_bidstream_watermark;""" ]
 
 user_activity_cache_to_cumulative_query = [f"""
-delete from {BIDSTREAM_DATABASE}.activity.user_activity
-where date in (select distinct date from {BIDSTREAM_DATABASE}.activity.user_activity_cache);
-""",
-f"""
-insert into {BIDSTREAM_DATABASE}.activity.user_activity
-select * from {BIDSTREAM_DATABASE}.activity.user_activity_cache;
+merge into {BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY t
+using ({BIDSTREAM_DATABASE}.ACTIVITY.USER_ACTIVITY_CACHE) s
+on t.PAGE_URL=s.PAGE_URL
+and t.DATE=s.DATE
+and t.PUBLISHER_DOMAIN_NORMALIZED=s.PUBLISHER_DOMAIN_NORMALIZED
+and t.PAGEVIEWS=s.PAGEVIEWS
+and equal_null(t.USER_ID,s.USER_ID)=true
+and equal_null(t.USER_IP,s.USER_IP)=true
+and equal_null(t.BW_COUNTRY_NORMALIZED,s.BW_COUNTRY_NORMALIZED)=true
+and equal_null(t.BW_REGION_NORMALIZED,s.BW_REGION_NORMALIZED)=true
+and equal_null(t.BW_CITY_NORMALIZED,s.BW_CITY_NORMALIZED)=true
+and equal_null(t.BW_ZIP_NORMALIZED,s.BW_ZIP_NORMALIZED)=true
+when not matched then insert
+(PAGE_URL,PUBLISHER_DOMAIN_NORMALIZED,USER_ID,USER_IP,DATE,BW_COUNTRY_NORMALIZED,BW_REGION_NORMALIZED,BW_CITY_NORMALIZED,BW_ZIP_NORMALIZED,PAGEVIEWS)
+values
+(s.PAGE_URL,s.PUBLISHER_DOMAIN_NORMALIZED,s.USER_ID,s.USER_IP,s.DATE,s.BW_COUNTRY_NORMALIZED,s.BW_REGION_NORMALIZED,s.BW_CITY_NORMALIZED,s.BW_ZIP_NORMALIZED,PAGEVIEWS);
+
 """]
 
 # ---- IP MAPPINGS ---- #
