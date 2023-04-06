@@ -51,21 +51,8 @@ dag = DAG('Beeswax_Channel', start_date = datetime(2022, 12, 7), schedule_interv
 # ---- USER ACTIVITY ---- #
 user_activity_query = [
 f"""
-set raw_bidstream_watermark = (select ifnull(max(date), date('2022-10-13')) from {BIDSTREAM_DATABASE}.activity.user_activity);
-""",
-
-"""
-set raw_bidstream_max_date = 
-(select 
-least(
-    (select max(date(bid_time)) from BEESWAX_EXTERNAL_SHARE.ANTENNA.SHARED_DEMANDSCIENCE_AUCTIONS_VIEW),
-    dateadd(day, {}, $raw_bidstream_watermark)));
-""".format(WBI_SIZE_TRANSFORMS),
-
-f"""
-delete from {BIDSTREAM_DATABASE}.activity.user_activity_cache
-where date > $raw_bidstream_watermark
-and date < $raw_bidstream_max_date;
+set raw_bidstream_watermark = (SELECT
+    CONVERT_TIMEZONE('America/Atikokan', CURRENT_TIMESTAMP()));
 """,
 f"""
 insert into {BIDSTREAM_DATABASE}.activity.user_activity_cache
@@ -80,15 +67,15 @@ select
     '' as bw_city_normalized, -- TODO: replace with join between city code and city name,
     geo_zip as bw_zip_normalized,
     count(*) as pageviews
-from BEESWAX_EXTERNAL_SHARE.ANTENNA.SHARED_DEMANDSCIENCE_AUCTIONS_VIEW
-where date > $raw_bidstream_watermark
-    and date < $raw_bidstream_max_date
+from "DEV_BIDSTREAM"."RAW_DATA"."AUCTION_LOGS"
+where bid_time <= $raw_bidstream_watermark
     and page_url is not null 
     and len(page_url) > 0
     and not (user_ip is null and user_id is null)
     and date is not null
 group by 1,3,4,5,6,7,8,9;
-"""]
+""",
+"""delete from "DEV_BIDSTREAM"."RAW_DATA"."AUCTION_LOGS" where bid_time <= $raw_bidstream_watermark;""" ]
 
 user_activity_cache_to_cumulative_query = [f"""
 delete from {BIDSTREAM_DATABASE}.activity.user_activity
@@ -871,5 +858,5 @@ with dag:
     #end success logic
 
     [delete_from_company_activity_cache_exec, bidstream_ip_mappings_cache_to_cumulative_exec, 
-    delete_from_user_activity_cache_exec, delete_from_unique_urls_cache_exec, clear_bitoid_to_ip_cache_exec,
-    clear_enriched_company_activity_cache_exec] >> end_success_exec
+    delete_from_user_activity_cache_exec, delete_from_unique_urls_cache_exec, clear_bitoid_to_ip_cache_exec
+    ] >> clear_enriched_company_activity_cache_exec >> end_success_exec
