@@ -19,13 +19,13 @@ PIXEL_DATABASE = Variable.get("PIXEL_DATABASE")
 EMAIL_CAMPAIGNS_DATABASE = Variable.get("EMAIL_CAMPAIGNS_DATABASE")
 LEADSIFT_DATABASE = Variable.get("LEADSIFT_DATABASE")
 
-
-# ---Variable definition--- #
+# ---DAG Variable definitions--- #
 DAG_NAME = 'Intent_Scoring'
 SCORE_DATE_GLOBAL_MIN = '2023-02-01'
 dt = datetime.now()
 date_time = dt.strftime("%m%d%Y%H:%M:%S")
 DOW = dt.weekday()
+
 
 # --- Function Definitions --- #
 def end_success():
@@ -79,10 +79,27 @@ def scoring_input_cache():
     lookback_date = min_score_date - timedelta(days = 120)
     lookback_date_str = lookback_date.strftime(date_format)
     #create input cache
+    join_clause = ""
     #if DOW == 6: #UNCOMMENT THIS AND THE ELSE BLOCK WHEN SWITCHING BACK TO DAILY UPDATES
-    snow_hook.run(scoring_input_cache_without_join(quote_wrap(lookback_date_str)))
-    #else:
-        #snow_hook.run(scoring_input_cache_with_join(quote_wrap(lookback_date_str)))
+      #join_clause = """join (select distinct 
+      #          normalized_company_domain,
+      #          normalized_country_code,
+      #          normalized_region_code,
+      #          normalized_city_name,
+      #          normalized_zip,
+      #          parent_category,
+      #          category,
+      #          topic
+      #        from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE ) a
+      #  on t.normalized_company_domain = a.normalized_company_domain
+      #  and t.parent_category = a.parent_category
+      #  and t.category = a.category
+      #  and t.topic = a.topic
+      #  and equal_null(t.normalized_country_code,a.normalized_country_code)
+      #  and equal_null(t.normalized_region_code,a.normalized_region_code)
+      #  and equal_null(t.normalized_city_name,a.normalized_city_name)
+      #  and equal_null(t.normalized_zip,a.normalized_zip) """
+    snow_hook.run(scoring_input_cache(quote_wrap(lookback_date_str), join_clause))
 
 def intent_scoring_backfill():
     date_format = '%Y-%m-%d'
@@ -103,145 +120,81 @@ def intent_scoring_backfill():
         snow_hook.run(scoring_query(quote_wrap(score_date_str)))
 
 # ---- SNOWFLAKE QUERIES ----
-def scoring_input_cache_without_join(lookback_date):
+def scoring_input_cache(lookback_date, join_clause):
     query = f"""
     create or replace table {AIML_DATABASE}.intent_scoring.input_cache as
-  with subset as (
-  select * from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING
-  where (title_output:"BUSINESS">=0.8 or title_output:"BUSINESS NEWS">=0.4 or title_output:"SCIENCE TECH NEWS">=0.55)
-  and date >= date({lookback_date}) 
-  and date < current_date), 
-    
-    bidstream as (
-      select
-        -- rollup cols
-        t.normalized_company_domain,
-        f.value:"parentCategory"::varchar as parent_category,
-        f.value:"category"::varchar as category,
-        f.value:"topic"::varchar as topic,
-        t.normalized_country_code,
-        t.normalized_region_code,
-        t.normalized_city_name,
-        t.normalized_zip,
-        t.date,
-        -- feature cols
-        sum(t.pageviews) as pageviews,
-        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
-        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
-        avg(case activity_type
-              when 'downloading' then 100
-              when 'reading' then 85
-              when 'visiting' then 50
-              when 'executing' then 10
-              when 'contacting' then 10
-              else 5 end) as activity_type_score,
-        avg(case information_type
-              when 'informational' then 100
-              when 'transactional' then 75
-              when 'navigational' then 25
-              else 5 end) as information_type_score,
-        sum(t.context_output:"review/comparison") as review_pageviews,
-        count(distinct t.page_url) as unique_pages,
-        count(distinct t.publisher_domain_normalized) as unique_pubs,
-        sum(t.unique_devices) as unique_devices,
-        sum(t.unique_ips) as unique_ips
-        -- table definition
-        from subset t,
-        lateral flatten(input=>t.intent_topics) f
-        group by 1,2,3,4,5,6,7,8,9 ),
+      with bidstream as (
+        select * from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING t
+        {join_clause}
+        where date >= date({lookback_date}) 
+        and date < current_date
+      ), 
         
-        pixel as (
-      select
-        -- rollup cols
-        t.normalized_company_domain,
-        f.value:"parentCategory"::varchar as parent_category,
-        f.value:"category"::varchar as category,
-        f.value:"topic"::varchar as topic,
-        t.normalized_country_code,
-        t.normalized_region_code,
-        t.normalized_city_name,
-        t.normalized_zip,
-        t.date,
-        -- feature cols
-        sum(t.pageviews) as pageviews,
-        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
-        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
-        avg(case activity_type
-              when 'downloading' then 100
-              when 'reading' then 85
-              when 'visiting' then 50
-              when 'executing' then 10
-              when 'contacting' then 10
-              else 5 end) as activity_type_score,
-        avg(case information_type
-              when 'informational' then 100
-              when 'transactional' then 75
-              when 'navigational' then 25
-              else 5 end) as information_type_score,
-        sum(t.context_output:"review/comparison") as review_pageviews,
-        count(distinct t.page_url) as unique_pages,
-        count(distinct t.publisher_domain_normalized) as unique_pubs,
-        sum(t.unique_devices) as unique_devices,
-        sum(t.unique_ips) as unique_ips
-        -- table definition
-        from {PIXEL_DATABASE}.ACTIVITY.PRESCORING t,
-        lateral flatten(input=>t.intent_topics) f
+      pixel as (
+        select * from {PIXEL_DATABASE}.ACTIVITY.PRESCORING t
+        where date >= date({lookback_date}) 
+        and date < current_date
+      ),
+      
+      email_campaigns as (
+        select * from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.PRESCORING
         where date >= date({lookback_date})
-        and date < current_date 
-        group by 1,2,3,4,5,6,7,8,9),
-
-    -- other sources would go here
-    combined_sources as (
-      select
-        coalesce(b.normalized_company_domain, p.normalized_company_domain, l.normalized_company_domain, e.normalized_company_domain) as normalized_company_domain,
-        coalesce(b.parent_category, p.parent_category, l.parent_category, e.parent_category) as parent_category,
-        coalesce(b.category, p.category, l.category, e.category) as category,
-        coalesce(b.topic, p.topic, l.topic, e.topic) as topic,
-        coalesce(b.normalized_country_code, p.normalized_country_code) as normalized_country_code,
-        coalesce(b.normalized_region_code, p.normalized_region_code) as normalized_region_code,
-        coalesce(b.normalized_city_name, p.normalized_city_name) as normalized_city_name,
-        coalesce(b.normalized_zip, p.normalized_zip) as normalized_zip,
-        coalesce(b.date, p.date, l.date, e.date) as date,
-        ifnull(b.pageviews,0) + ifnull(p.pageviews,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as pageviews,
-        ifnull(b.weighted_pageviews,0) + 10*ifnull(p.weighted_pageviews,0) + ifnull(iff(l.leadsift_score=0,50,l.leadsift_score)/100,0) + ifnull(e.weighted_clicks,0)*10 + 5*ifnull(e.weighted_opens,0) as weighted_pageviews,
-        ifnull(b.avg_page_relevance,1.0) as avg_page_relevance,
-        ifnull(b.activity_type_score,100) as activity_type_score,
-        ifnull(b.information_type_score,100) as information_type_score,
-        ifnull(b.review_pageviews,0) as review_pageviews,
-        ifnull(b.unique_pages,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pages,
-        ifnull(b.unique_pubs,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pubs
-    from bidstream b
-    --join to email
-    full outer join (select * from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.PRESCORING
-                     where date >= date({lookback_date})
-                     and date < current_date) e
-    on b.normalized_company_domain = e.normalized_company_domain
-    and b.parent_category = e.parent_category
-    and b.category = e.category
-    and b.topic = e.topic
-    and b.date = e.date
-    --join to leadisft
-    full outer join (select * from {LEADSIFT_DATABASE}.ACTIVITY.PRESCORING
-                     where date >= date({lookback_date})
-                     and date < current_date) l
-    on b.normalized_company_domain = l.normalized_company_domain
-    and b.parent_category = l.parent_category
-    and b.category = l.category
-    and b.topic = l.topic
-    and b.date = l.date
-    --join to pixel
-    full outer join pixel p
-    on b.normalized_company_domain = p.normalized_company_domain
-    and b.normalized_country_code = p.normalized_country_code
-    and b.normalized_region_code = p.normalized_region_code
-    and b.normalized_city_name = p.normalized_city_name
-    and b.normalized_zip = p.normalized_zip
-    and b.parent_category = p.parent_category
-    and b.category = p.category
-    and b.topic = p.topic
-    and b.date = p.date
+        and date < current_date
+      ),
+      
+      leadsift as (
+        select * from {LEADSIFT_DATABASE}.ACTIVITY.PRESCORING
+        where date >= date({lookback_date})
+        and date < current_date
+      ),
+      
+      combined_sources as (
+        select
+          coalesce(b.normalized_company_domain, p.normalized_company_domain, l.normalized_company_domain, e.normalized_company_domain) as normalized_company_domain,
+          coalesce(b.parent_category, p.parent_category, l.parent_category, e.parent_category) as parent_category,
+          coalesce(b.category, p.category, l.category, e.category) as category,
+          coalesce(b.topic, p.topic, l.topic, e.topic) as topic,
+          coalesce(b.normalized_country_code, p.normalized_country_code) as normalized_country_code,
+          coalesce(b.normalized_region_code, p.normalized_region_code) as normalized_region_code,
+          coalesce(b.normalized_city_name, p.normalized_city_name) as normalized_city_name,
+          coalesce(b.normalized_zip, p.normalized_zip) as normalized_zip,
+          coalesce(b.date, p.date, l.date, e.date) as date,
+          ifnull(b.pageviews,0) + ifnull(p.pageviews,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as pageviews,
+          1000*(ifnull(b.weighted_pageviews,0) + 10*ifnull(p.weighted_pageviews,0) + ifnull(iff(l.leadsift_score=0,50,l.leadsift_score)/100,0) + ifnull(e.weighted_clicks,0)*10 + 5*ifnull(e.weighted_opens,0)) as weighted_pageviews,
+          ifnull(b.avg_page_relevance,1.0) as avg_page_relevance,
+          ifnull(b.activity_type_score,100) as activity_type_score,
+          ifnull(b.information_type_score,100) as information_type_score,
+          ifnull(b.review_pageviews,0) as review_pageviews,
+          ifnull(b.unique_pages,0) + ifnull(p.unique_pages,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pages,
+          ifnull(b.unique_pubs,0) + ifnull(p.unique_pubs,0) + ifnull(ceil(iff(l.leadsift_score=0,50,l.leadsift_score)/100),0) + ifnull(ceil(e.weighted_clicks),0) + ifnull(ceil(e.weighted_opens),0) as unique_pubs
+        from bidstream b
+        --join to email
+        full outer join email_campaigns e
+        on b.normalized_company_domain = e.normalized_company_domain
+        and b.parent_category = e.parent_category
+        and b.category = e.category
+        and b.topic = e.topic
+        and b.date = e.date
+        --join to leadisft
+        full outer join leadsift l
+        on b.normalized_company_domain = l.normalized_company_domain
+        and b.parent_category = l.parent_category
+        and b.category = l.category
+        and b.topic = l.topic
+        and b.date = l.date
+        --join to pixel
+        full outer join pixel p
+        on b.normalized_company_domain = p.normalized_company_domain
+        and b.normalized_country_code = p.normalized_country_code
+        and b.normalized_region_code = p.normalized_region_code
+        and b.normalized_city_name = p.normalized_city_name
+        and b.normalized_zip = p.normalized_zip
+        and b.parent_category = p.parent_category
+        and b.category = p.category
+        and b.topic = p.topic
+        and b.date = p.date
     
-    )
+      )
     -- main select statement
     select
       *,
@@ -265,95 +218,8 @@ def scoring_input_cache_without_join(lookback_date):
                                                     normalized_zip
                                    order by date asc
                                    rows between unbounded preceding and current row),0) as moving_stddev_weighted_pageviews
-    from combined_sources;
-
-    """
-    return query
-
-def scoring_input_cache_with_join(lookback_date):
-    query = f"""
-    create or replace table {AIML_DATABASE}.intent_scoring.input_cache as (
-  with subset as (
-  select t.* from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING t
-  join (select distinct 
-                normalized_company_domain,
-                normalized_country_code,
-                normalized_region_code,
-                normalized_city_name,
-                normalized_zip
-              from {BIDSTREAM_DATABASE}.ACTIVITY.PRESCORING_CACHE ) a
-        on t.normalized_company_domain = a.normalized_company_domain
-        and t.normalized_country_code = a.normalized_country_code
-        and t.normalized_region_code = a.normalized_region_code
-        and t.normalized_city_name = a.normalized_city_name
-        and t.normalized_zip = a.normalized_zip
-  where (title_output:"BUSINESS">=0.8 or title_output:"BUSINESS NEWS">=0.4 or title_output:"SCIENCE TECH NEWS">=0.55)
-  and date >= date({lookback_date})
-  and date < current_date),
-    bidstream as (
-      select
-        -- rollup cols
-        t.normalized_company_domain,
-        f.value:"parentCategory"::varchar as parent_category,
-        f.value:"category"::varchar as category,
-        f.value:"topic"::varchar as topic,
-        t.normalized_country_code,
-        t.normalized_region_code,
-        t.normalized_city_name,
-        t.normalized_zip,
-        t.date,
-        -- feature cols
-        sum(t.pageviews) as pageviews,
-        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
-        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
-        avg(case activity_type
-              when 'downloading' then 100
-              when 'reading' then 85
-              when 'visiting' then 50
-              when 'executing' then 10
-              when 'contacting' then 10
-              else 5 end) as activity_type_score,
-        avg(case information_type
-              when 'informational' then 100
-              when 'transactional' then 75
-              when 'navigational' then 25
-              else 5 end) as information_type_score,
-        sum(t.context_output:"review/comparison") as review_pageviews,
-        count(distinct t.page_url) as unique_pages,
-        count(distinct t.publisher_domain_normalized) as unique_pubs,
-        sum(t.unique_devices) as unique_devices,
-        sum(t.unique_ips) as unique_ips
-        -- table definition
-        from subset t,
-        lateral flatten(input=>t.intent_topics) f
-        group by 1,2,3,4,5,6,7,8,9 )
-
-    -- other sources would go here
-
-    -- main select statement
-    select
-      *,
-      avg(weighted_pageviews) over (partition by normalized_company_domain,
-                                                   parent_category,
-                                                    category,
-                                                    topic,
-                                                    normalized_country_code,
-                                                    normalized_region_code,
-                                                    normalized_city_name,
-                                                    normalized_zip
-                                   order by date asc
-                                   rows between unbounded preceding and current row) as moving_avg_weighted_pageviews,
-      stddev(weighted_pageviews) over (partition by normalized_company_domain,
-                                                   parent_category,
-                                                    category,
-                                                    topic,
-                                                    normalized_country_code,
-                                                    normalized_region_code,
-                                                    normalized_city_name,
-                                                    normalized_zip
-                                   order by date asc
-                                   rows between unbounded preceding and current row) as moving_stddev_weighted_pageviews
-    from bidstream);
+    from combined_sources
+    where weighted_pageviews>0;
 
     """
     return query
@@ -454,7 +320,7 @@ def scoring_query(score_date):
         else (tm_pageviews - lm_pageviews)/lm_pageviews
       end as month_over_month_trend,
       -- FINAL SCORE
-      least(100,greatest(0, (0.3*volume + 0.3*recency + 0.3*context + 0.1*variety)+least(10,greatest(0, 10*week_over_week_trend))+least(20,greatest(-10, 20*month_over_month_trend)))) as intent_score
+      least(100,greatest(0, (0.25*volume + 0.2*recency + 0.5*context + 0.05*variety)+least(10,greatest(0, 10*week_over_week_trend))+least(20,greatest(-10, 20*month_over_month_trend)))) as intent_score
       from lookback_input_cache a
       --join to this week's activity
       left join this_week_activity tw
