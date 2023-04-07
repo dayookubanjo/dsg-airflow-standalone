@@ -99,7 +99,7 @@ def scoring_input_cache():
       #  and equal_null(t.normalized_region_code,a.normalized_region_code)
       #  and equal_null(t.normalized_city_name,a.normalized_city_name)
       #  and equal_null(t.normalized_zip,a.normalized_zip) """
-    snow_hook.run(scoring_input_cache(quote_wrap(lookback_date_str), join_clause))
+    snow_hook.run(create_scoring_input_cache(quote_wrap(lookback_date_str), join_clause))
 
 def intent_scoring_backfill():
     date_format = '%Y-%m-%d'
@@ -120,7 +120,7 @@ def intent_scoring_backfill():
         snow_hook.run(scoring_query(quote_wrap(score_date_str)))
 
 # ---- SNOWFLAKE QUERIES ----
-def scoring_input_cache(lookback_date, join_clause):
+def create_scoring_input_cache(lookback_date, join_clause):
     query = f"""
     create or replace table {AIML_DATABASE}.intent_scoring.input_cache as
       with bidstream as (
