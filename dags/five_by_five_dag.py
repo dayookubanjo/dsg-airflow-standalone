@@ -51,55 +51,88 @@ def end_success():
 merge_devmart_domain_observations_query = [
    f"""MERGE INTO {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS as target_table
 USING 
-
-(SELECT DISTINCT A.*, 'FIVE BY FIVE' AS SOURCE FROM  {FIVE_BY_FIVE_TABLE} AS A) as source_table
-
-ON (source_table.IP_ADDRESS = target_table.IP AND source_table.SOURCE = target_table.SOURCE)
-WHEN MATCHED THEN
-    UPDATE SET 
-      
-    target_table.DATE = current_date(),
-    target_table.NORMALIZED_COMPANY_DOMAIN =   source_table.COMPANY_DOMAIN,
-    target_table.SOURCE_CONFIDENCE =    source_table.DISTRIBUTION_PERCENTAGE   
+(with top_domains as (
+    select distinct
+        ip_address as ip,
+        dev_datamart.public.domain_normalizer(company_domain) as normalized_company_domain,
+        distribution_percentage as source_confidence
+    from {FIVE_BY_FIVE_TABLE}
+    where normalized_company_domain is not null and normalized_company_domain!='Shared' and len(normalized_company_domain)>1),
+ secondary_domains as (
+ select distinct
+ t.ip_address as ip,
+ dev_datamart.public.domain_normalizer(f.value) as normalized_company_domain,
+ t.distribution_percentage as source_confidence
+ from {FIVE_BY_FIVE_TABLE} t,
+ lateral split_to_table(t.company_domain_array,',') f
+ where normalized_company_domain is not null and normalized_company_domain!='Shared' and len(normalized_company_domain)>1)
+ )  
+  SELECT distinct
+    ip,
+    normalized_company_domain,
+    source_confidence
+    from top_domains
+    union 
+    select * from
+    secondary_domains) as source_table
+ON (source_table.IP = target_table.IP 
+    AND source_table.normalized_company_domain = target_table.normalized_company_domain 
+    and target_table.SOURCE = 'FIVE BY FIVE'
+    and target_table.date = current_date) 
 WHEN NOT MATCHED THEN
     INSERT (IP, NORMALIZED_COMPANY_DOMAIN, SOURCE, SOURCE_CONFIDENCE, DATE )
-    VALUES(source_table.IP_ADDRESS,
-           source_table.COMPANY_DOMAIN,
+    VALUES(source_table.IP,
+           source_table.normalized_COMPANY_DOMAIN,
            'FIVE BY FIVE',
-            source_table.DISTRIBUTION_PERCENTAGE   ,
-          current_date() 
+            source_table.source_confidence,
+          current_date
           );"""
     ]
 
 create_devmart_domain_query = [
     f"""create or replace table {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as
-with most_recent as(
+with scores as(
     select distinct
     ip,
-    first_value(normalized_company_domain) over (partition by ip, source order by date desc) as latest_domain,
+    normalized_company_domain,
     source,
-    source_confidence
-from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
-),
-rolled_obs as (
-    select
-    ip,
-    latest_domain,
-    array_agg(distinct source) as sources,
-    iff(array_size(sources)>1, 1, sum((case source
+    source_confidence,
+    case source
         when 'DIGITAL ELEMENT' then 0.3
         when 'IP FLOW' then 0.5
         when 'FIVE BY FIVE' then 0.9
-    else 0.0 end)*ifnull(source_confidence, 1))) as score
-  from most_recent
-  group by 1,2
-) 
-
-select distinct
+        when 'LASTBOUNCE' then 0.7
+    else 0.5 end as source_score,
+    1.0-(0.01*(current_date - date)) as recency_score,
+    ifnull(source_confidence, 1)*recency_score*source_score as score
+from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
+where normalized_company_domain != 'Shared'
+and normalized_company_domain is not null
+and len(normalized_company_domain)>1
+),
+map_scores as (
+    select
     ip,
-    first_value(latest_domain) over (partition by ip order by score desc) as normalized_company_domain,
-    first_value(score) over (partition by ip order by score desc) as score
-from rolled_obs;"""
+    normalized_company_domain,
+    array_agg(distinct source) as sources,
+    sum(score) as score
+  from scores
+  group by 1,2
+),
+score_totals as (
+    select
+    ip,
+    sum(score) as score_total
+    from map_scores
+  group by 1
+)
+select distinct
+    a.ip,
+    normalized_company_domain,
+    greatest(0.1,score/score_total) as score
+from map_scores a
+join score_totals b
+on a.ip = b.ip;"""
     ]
 
 with DAG(

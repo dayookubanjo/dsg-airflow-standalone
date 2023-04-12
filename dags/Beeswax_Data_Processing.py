@@ -195,32 +195,48 @@ values
 
 datamart_ip_domain_mappings_update_query = [f"""
 create or replace table {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN as
-with most_recent as(
+with scores as(
     select distinct
     ip,
-    first_value(normalized_company_domain) over (partition by ip, source order by date desc) as latest_domain,
+    normalized_company_domain,
     source,
-    source_confidence
-from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
-),
-rolled_obs as (
-    select
-    ip,
-    latest_domain,
-    array_agg(distinct source) as sources,
-    iff(array_size(sources)>1, 1, sum((case source
+    source_confidence,
+    case source
         when 'DIGITAL ELEMENT' then 0.3
         when 'IP FLOW' then 0.5
         when 'FIVE BY FIVE' then 0.9
-    else 0.0 end)*ifnull(source_confidence, 1))) as score
-  from most_recent
+        when 'LASTBOUNCE' then 0.7
+    else 0.5 end as source_score,
+    1.0-(0.01*(current_date - date)) as recency_score,
+    ifnull(source_confidence, 1)*recency_score*source_score as score
+from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
+where normalized_company_domain != 'Shared'
+and normalized_company_domain is not null
+and len(normalized_company_domain)>1
+),
+map_scores as (
+    select
+    ip,
+    normalized_company_domain,
+    array_agg(distinct source) as sources,
+    sum(score) as score
+  from scores
   group by 1,2
+),
+score_totals as (
+    select
+    ip,
+    sum(score) as score_total
+    from map_scores
+  group by 1
 )
 select distinct
-    ip,
-    first_value(latest_domain) over (partition by ip order by score desc) as normalized_company_domain,
-    first_value(score) over (partition by ip order by score desc) as score
-from rolled_obs;
+    a.ip,
+    normalized_company_domain,
+    greatest(0.1,score/score_total) as score
+from map_scores a
+join score_totals b
+on a.ip = b.ip;
 """]
 
 #--- DIG Updates ----- #
@@ -361,7 +377,7 @@ select
     a.pageviews,
     a.user_id,
     a.user_ip
-from {BIDSTREAM_DATABASE}.activity.user_activity_cache a -- CHANGE BACK TO CACHE
+from {BIDSTREAM_DATABASE}.activity.user_activity_cache a
 left join {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain d
 on a.user_ip = d.ip
 left join {DATAMART_DATABASE}.entity_mappings.bitoid_to_company_domain dig
