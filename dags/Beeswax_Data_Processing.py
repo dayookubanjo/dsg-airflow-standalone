@@ -239,6 +239,33 @@ join score_totals b
 on a.ip = b.ip;
 """]
 
+datamart_ip_trio_domain_mappings_update_query = [f"""
+create or replace table {DATAMART_DATABASE}."ENTITY_MAPPINGS"."IP_TRIO_MAPPINGS" as
+with trio_domain_scores as (
+    select
+        SPLIT_PART(ip, '.', 1) || '.' || SPLIT_PART(ip, '.', 2) || '.' || SPLIT_PART(ip, '.', 3) as ip_trio,
+        normalized_company_domain,
+        sum(score) as score
+  from {DATAMART_DATABASE}."ENTITY_MAPPINGS"."IP_TO_COMPANY_DOMAIN"
+  where not (normalized_company_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS))
+  group by 1,2
+),
+trio_totals as (
+    select
+        ip_trio,
+        sum(score) as score_total
+  from trio_domain_scores
+  group by 1
+)
+select distinct
+a.ip_trio,
+normalized_company_domain,
+greatest(0.01,score/score_total) as score
+from trio_domain_scores a
+join trio_totals b
+on a.ip_trio = b.ip_trio;
+"""]
+
 #--- DIG Updates ----- #
 bitoid_to_ip_cache_query = [f"""
 merge into {BIDSTREAM_DATABASE}.entity_relationships.bitoid_to_ip_observations_cache t
@@ -388,47 +415,72 @@ left join {DATAMART_DATABASE}.geographics.unique_geos g
 on bw_country = g.normalized_country_code and bw_region = g.normalized_region_code and bw_zip = g.normalized_zip
 where a.date > $user_activity_watermark and a.date <= $user_activity_max_date
 ),
--- now decide what to use
-selected_values as (
-select
+
+deterministic_activity as (
+select distinct
     page_url,
     publisher_domain_normalized,
     -- deal with domain
     case
         when user_ip is null or len(user_ip) < 2 then dig_domain
-        when (endswith(user_ip, '.0') or ip_domain_is_isp or ip_domain = 'Shared' or len(ip_domain) < 2) and not (dig_domain is null) then dig_domain
-        else ip_domain
-    end as chosen_domain,
-    case
-        when chosen_domain = dig_domain then dig_domain_conf
-        when chosen_domain = ip_domain then ip_domain_conf
-    else 0.0 end as domain_conf,
+        when (endswith(user_ip, '.0') or ip_domain_is_isp or ip_domain = 'shared' or len(ip_domain) < 2) and not (dig_domain is null) then dig_domain
+        when not (ip_domain is null or ip_domain = 'shared' or len(ip_domain)<2 or ip_domain_is_isp or endswith(user_ip, '.0')) then ip_domain
+        else null
+    end as normalized_company_domain,
     date,
     -- deal with location
-    iff(ip_loc_not_null, ip_country, bw_country) as chosen_country,
-    iff(ip_loc_not_null, ip_region, bw_region) as chosen_region,
-    iff(ip_loc_not_null, ip_city, bw_city) as chosen_city,
-    iff(ip_loc_not_null, ip_zip, bw_zip) as chosen_zip,
+    iff(ip_loc_not_null, ip_country, bw_country) as normalized_country_code,
+    iff(ip_loc_not_null, ip_region, bw_region) as normalized_region_code,
+    iff(ip_loc_not_null, ip_city, bw_city) as normalized_city_name,
+    iff(is_integer(try_to_number(iff(ip_loc_not_null, ip_zip, bw_zip))) 
+        and normalized_country_code = 'USA' 
+        and len(iff(ip_loc_not_null, ip_zip, bw_zip)) = 4, '0'||iff(ip_loc_not_null, ip_zip, bw_zip),iff(ip_loc_not_null, ip_zip, bw_zip)) as normalized_zip,
     -- remaining fields
     pageviews,
-    user_ip,
-    user_id
+    case
+        when normalized_company_domain = dig_domain then dig_domain_conf
+        when normalized_company_domain = ip_domain then ip_domain_conf
+    else 0.0 end as domain_conf,
+    user_id,
+    user_ip
 from joined_activity
- )   
+   where normalized_country_code is not null
+   and normalized_region_code is not null
+   and normalized_city_name is not null
+   and normalized_zip is not null
+ ),
+ probabilistic_activity as (
+ select distinct
+   page_url,
+   publisher_domain_normalized,
+   b.normalized_company_domain,
+   date,
+   normalized_country_code,
+   normalized_region_code,
+   normalized_city_name,
+   normalized_zip,
+   pageviews,
+   b.score as domain_conf,
+   user_id,
+   user_ip
+from (select * from deterministic_activity where normalized_company_domain is null) a
+join {DATAMART_DATABASE}."ENTITY_MAPPINGS"."IP_TRIO_MAPPINGS" b
+on (SPLIT_PART(user_ip, '.', 1) || '.' || SPLIT_PART(user_ip, '.', 2) || '.' || SPLIT_PART(user_ip, '.', 3)) = b.ip_trio
+ )
    select
    page_url,
    any_value(publisher_domain_normalized) as publisher_domain_normalized,
-   chosen_domain as normalized_company_domain,
+   normalized_company_domain,
    date,
-   chosen_country as normalized_country_code,
-   chosen_region as normalized_region_code,
-   chosen_city as normalized_city_name,
-   iff(is_integer(try_to_number(chosen_zip)) and normalized_country_code = 'USA' and len(chosen_zip) = 4, '0'||chosen_zip,chosen_zip) as normalized_zip,
+   normalized_country_code,
+   normalized_region_code,
+   normalized_city_name,
+   normalized_zip,
    sum(pageviews) as pageviews,
    sum(domain_conf*pageviews) as weighted_pageviews,
    count(distinct user_id) as unique_devices,
    count(distinct user_ip) as unique_ips
-   from selected_values
+   from (select * from deterministic_activity union select * from probabilistic_activity)
    where normalized_company_domain is not null and normalized_company_domain != 'Shared' and len(normalized_company_domain) > 1
    and normalized_country_code is not null
    and normalized_region_code is not null
@@ -750,6 +802,12 @@ with dag:
     snowflake_conn_id= TRANSFORM_CONNECTION,
     )
 
+    datamart_ip_trio_domain_mappings_exec = SnowflakeOperator(
+    task_id= "datamart_ip_trio_domain_update",
+    sql= datamart_ip_trio_domain_mappings_update_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
     #-----DIG LOGIC ----#
     bitoid_to_ip_cache_exec = SnowflakeOperator(
     task_id= "bitoid_to_ip_cache",
@@ -862,8 +920,8 @@ with dag:
     )
     
     #main logic
-    user_activity_exec >> bidstream_ip_mappings_exec >> datamart_ip_loc_mappings_exec >> de_ip_domain_obs_exec >> datamart_ip_domain_mappings_exec
-    datamart_ip_domain_mappings_exec >> bitoid_to_ip_cache_exec >> bitoid_to_domain_obs_exec >> bitoid_to_domain_map_exec >> company_activity_exec
+    user_activity_exec >> bidstream_ip_mappings_exec >> datamart_ip_loc_mappings_exec >> de_ip_domain_obs_exec >> datamart_ip_domain_mappings_exec >> datamart_ip_trio_domain_mappings_exec
+    datamart_ip_trio_domain_mappings_exec >> bitoid_to_ip_cache_exec >> bitoid_to_domain_obs_exec >> bitoid_to_domain_map_exec >> company_activity_exec
     company_activity_exec >> unique_urls_exec >> web_scraper_input_cache_exec
     company_activity_exec >> enriched_company_activity_cache_exec >> prescoring_cache_exec
     
