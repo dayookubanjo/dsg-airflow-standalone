@@ -373,116 +373,130 @@ set user_activity_watermark = (select ifnull(max(date), '2022-10-13') from {BIDS
 set user_activity_max_date = (select dateadd(day, {}, $user_activity_watermark));
 """.format(WBI_SIZE_TRANSFORMS),
 f"""
+-- 0. figure out what domains can be resolved via IP
+merge into {BIDSTREAM_DATABASE}."ENTITY_RELATIONSHIPS"."IP_RESOLVABLE_DOMAINS" t
+using (
+    select distinct
+  normalized_company_domain,
+  date
+  from {BIDSTREAM_DATABASE}.activity.user_activity_cache a
+  join {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain b
+  on a.user_ip = b.ip
+  where a.date > $user_activity_watermark and a.date <= $user_activity_max_date
+  and (not endswith(ip,'.0')) 
+  and (not (normalized_company_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS)))
+  and normalized_company_domain is not null
+  and len(normalized_company_domain)>1 and normalized_company_domain!='shared'
+) s
+on s.normalized_company_domain = t.normalized_company_domain
+and s.date = t.date
+when not matched then insert
+(normalized_company_domain, date)
+values
+(s.normalized_company_domain, s.date);
+""",
+f"""
 delete from {BIDSTREAM_DATABASE}.activity.company_activity_cache
 where date > $user_activity_watermark and date <= $user_activity_max_date;
 """,
 f"""
 insert into {BIDSTREAM_DATABASE}.activity.company_activity_cache
--- company activity cache leveraging DIG
--- assumption: user_ip or user_id might be null, but not both. user_ip might end in .0
--- first join everything together
-with joined_activity as (
+with filtered_ip_mappings as (
+select distinct
+  ip,
+  normalized_company_domain,
+  score
+from {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain
+where (not endswith(ip,'.0')) and (not (normalized_company_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS)))
+  and len(normalized_company_domain)>1 and normalized_company_domain!='shared'
+),
+-- 1. left join user activity to ip->domain with ISPs and .0s taken out
+ip_joined as (
 select
-    page_url,
-    publisher_domain_normalized,
-    d.normalized_company_domain as ip_domain,-- might be a known ISP
-    d.score as ip_domain_conf,
-    dig.normalized_company_domain as dig_domain, -- will never be a known ISP (we remove them in DIG)
-    dig.score as dig_domain_conf,
-    iff(dig_domain in (select distinct domain from {DATAMART_DATABASE}.FILTERS_SUPPRESSIONS.KNOWN_ISP_DOMAINS), true, false) as ip_domain_is_isp,
-    a.date,
-    a.bw_country_normalized as bw_country,
-    a.bw_region_normalized as bw_region,
-    g.normalized_city_name as bw_city, -- change this as soon as we can get the direct city from BW
-    a.bw_zip_normalized::varchar as bw_zip,
-    iff((bw_country is not null) and (bw_region is not null) and (bw_city is not null) and (bw_zip is not null), true, false) as bw_loc_not_null,
+    a.*,
+    normalized_company_domain,
+    score
+from {BIDSTREAM_DATABASE}.activity.user_activity_cache a
+left join filtered_ip_mappings d
+on a.user_ip = d.ip
+where a.date > $user_activity_watermark and a.date <= $user_activity_max_date
+),
+-- 2. left join 1* to DIG
+dig_joined as (
+select 
+    a.* exclude (normalized_company_domain, score),
+    dig.normalized_company_domain,
+    dig.score
+from (select * from ip_joined where normalized_company_domain is null) a
+left join {DATAMART_DATABASE}.entity_mappings.bitoid_to_company_domain dig
+on a.user_id = dig.bitoid
+where len(dig.normalized_company_domain)>1 and dig.normalized_company_domain!='shared'
+),
+-- 3. inner join 1* to ip trio -> domain table
+filtered_trio_mappings as (
+select 
+  ip_trio,
+  normalized_company_domain,
+  score
+from 
+{DATAMART_DATABASE}."ENTITY_MAPPINGS"."IP_TRIO_MAPPINGS"
+  where (not (normalized_company_domain in (select distinct normalized_company_domain from {BIDSTREAM_DATABASE}.entity_relationships.ip_resolvable_domains where date between current_date - 180 and current_date)))
+  and len(normalized_company_domain)>1 and normalized_company_domain!='shared'
+),
+trio_joined as (
+select
+    a.* exclude (normalized_company_domain, score),
+    b.normalized_company_domain,
+    b.score
+from (select * from ip_joined where normalized_company_domain is null) a
+join filtered_trio_mappings b
+on (SPLIT_PART(a.user_ip, '.', 1) || '.' || SPLIT_PART(a.user_ip, '.', 2) || '.' || SPLIT_PART(a.user_ip, '.', 3)) = b.ip_trio
+),
+-- 4. join results 1+2+3 to location
+combined_w_location as (
+  select 
+    a.* exclude bw_city_normalized,
+    iff((bw_country_normalized is not null) and (bw_region_normalized is not null) and (g.normalized_city_name is not null) and (bw_zip_normalized is not null), true, false) as bw_loc_not_null,
     l.normalized_country_code as ip_country, 
     l.normalized_region_code as ip_region, 
     l.normalized_city_name as ip_city,
     l.normalized_zip::varchar as ip_zip,
     iff((ip_country is not null) and (ip_region is not null) and (ip_city is not null) and (ip_zip is not null), true, false) as ip_loc_not_null,
-    a.pageviews,
-    a.user_id,
-    a.user_ip
-from {BIDSTREAM_DATABASE}.activity.user_activity_cache a
-left join {DATAMART_DATABASE}.entity_mappings.ip_to_company_domain d
-on a.user_ip = d.ip
-left join {DATAMART_DATABASE}.entity_mappings.bitoid_to_company_domain dig
-on a.user_id = dig.bitoid
+    iff(ip_loc_not_null, ip_country, bw_country_normalized) as norm_country_code, --naming this way for this part to avoid name collisions
+    iff(ip_loc_not_null, ip_region, bw_region_normalized) as norm_region_code, --naming this way for this part to avoid name collisions
+    iff(ip_loc_not_null, ip_city, g.normalized_city_name) as norm_city_name, --naming this way for this part to avoid name collisions
+    iff(ip_loc_not_null, ip_zip, bw_zip_normalized) as chosen_zip,
+    iff(is_integer(try_to_number(chosen_zip)) 
+        and norm_country_code = 'USA' 
+        and len(chosen_zip) = 4, '0'||chosen_zip,chosen_zip) as norm_zip --naming this way for this part to avoid name collisions
+  from (
+(select * from ip_joined where normalized_company_domain is not null)
+union all
+(select * from dig_joined where normalized_company_domain is not null)
+union all
+(select * from trio_joined where normalized_company_domain is not null)
+) a
 left join {DATAMART_DATABASE}.entity_mappings.ip_to_location l
 on a.user_ip = l.ip
 left join {DATAMART_DATABASE}.geographics.unique_geos g
-on bw_country = g.normalized_country_code and bw_region = g.normalized_region_code and bw_zip = g.normalized_zip
-where a.date > $user_activity_watermark and a.date <= $user_activity_max_date
-),
-
-deterministic_activity as (
-select distinct
-    page_url,
-    publisher_domain_normalized,
-    -- deal with domain
-    case
-        when user_ip is null or len(user_ip) < 2 then dig_domain
-        when (endswith(user_ip, '.0') or ip_domain_is_isp or ip_domain = 'shared' or len(ip_domain) < 2) and not (dig_domain is null) then dig_domain
-        when not (ip_domain is null or ip_domain = 'shared' or len(ip_domain)<2 or ip_domain_is_isp or endswith(user_ip, '.0')) then ip_domain
-        else null
-    end as normalized_company_domain,
-    date,
-    -- deal with location
-    iff(ip_loc_not_null, ip_country, bw_country) as normalized_country_code,
-    iff(ip_loc_not_null, ip_region, bw_region) as normalized_region_code,
-    iff(ip_loc_not_null, ip_city, bw_city) as normalized_city_name,
-    iff(is_integer(try_to_number(iff(ip_loc_not_null, ip_zip, bw_zip))) 
-        and normalized_country_code = 'USA' 
-        and len(iff(ip_loc_not_null, ip_zip, bw_zip)) = 4, '0'||iff(ip_loc_not_null, ip_zip, bw_zip),iff(ip_loc_not_null, ip_zip, bw_zip)) as normalized_zip,
-    -- remaining fields
-    pageviews,
-    case
-        when normalized_company_domain = dig_domain then dig_domain_conf
-        when normalized_company_domain = ip_domain then ip_domain_conf
-    else 0.0 end as domain_conf,
-    user_id,
-    user_ip
-from joined_activity
-   where normalized_country_code is not null
-   and normalized_region_code is not null
-   and normalized_city_name is not null
-   and normalized_zip is not null
- ),
- probabilistic_activity as (
- select distinct
-   page_url,
-   publisher_domain_normalized,
-   b.normalized_company_domain,
-   date,
-   normalized_country_code,
-   normalized_region_code,
-   normalized_city_name,
-   normalized_zip,
-   pageviews,
-   b.score as domain_conf,
-   user_id,
-   user_ip
-from (select * from deterministic_activity where normalized_company_domain is null) a
-join {DATAMART_DATABASE}."ENTITY_MAPPINGS"."IP_TRIO_MAPPINGS" b
-on (SPLIT_PART(user_ip, '.', 1) || '.' || SPLIT_PART(user_ip, '.', 2) || '.' || SPLIT_PART(user_ip, '.', 3)) = b.ip_trio
- )
+on bw_country_normalized = g.normalized_country_code and bw_region_normalized = g.normalized_region_code and bw_zip_normalized = g.normalized_zip
+)
+--5. filter and aggregate
    select
    page_url,
    any_value(publisher_domain_normalized) as publisher_domain_normalized,
    normalized_company_domain,
    date,
-   normalized_country_code,
-   normalized_region_code,
-   normalized_city_name,
-   normalized_zip,
+   norm_country_code as normalized_country_code,
+   norm_region_code as normalized_region_code,
+   norm_city_name as normalized_city_name,
+   norm_zip as normalized_zip,
    sum(pageviews) as pageviews,
-   sum(domain_conf*pageviews) as weighted_pageviews,
+   sum(score*pageviews) as weighted_pageviews,
    count(distinct user_id) as unique_devices,
    count(distinct user_ip) as unique_ips
-   from (select * from deterministic_activity union select * from probabilistic_activity)
-   where normalized_company_domain is not null and normalized_company_domain != 'Shared' and len(normalized_company_domain) > 1
-   and normalized_country_code is not null
+   from combined_w_location
+   where normalized_country_code is not null
    and normalized_region_code is not null
    and normalized_city_name is not null
    and normalized_zip is not null
