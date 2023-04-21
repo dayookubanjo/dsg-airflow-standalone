@@ -207,7 +207,7 @@ with scores as(
         when 'FIVE BY FIVE' then 0.9
         when 'LASTBOUNCE' then 0.7
     else 0.5 end as source_score,
-    1.0-(0.01*(current_date - date)) as recency_score,
+    greatest(0.01,1.0-(0.01*(current_date - date))) as recency_score,
     ifnull(source_confidence, 1)*recency_score*source_score as score
 from {DATAMART_DATABASE}.ENTITY_MAPPINGS.IP_TO_COMPANY_DOMAIN_OBSERVATIONS
 where normalized_company_domain != 'Shared'
