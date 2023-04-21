@@ -153,16 +153,18 @@ scraper_results_merge_query = [f"""
             any_value(result:body::varchar) as content,
             any_value(result:contenttype::varchar) as content_type,
             any_value(result:image::varchar) as image,
-            any_value(result:lang::varchar) as language
+            any_value(result:lang::varchar) as language,
+            {AIML_DATABASE}.public.clean_string(any_value(result:body::varchar),1100) as CLEANED_CONTENT,
+            {AIML_DATABASE}.public.clean_string(any_value(result:title::varchar),75) as CLEANED_TITLE
         from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE
         where result != 'null' and result is not null
         group by 1
     ) s
     on s.page_url = t.page_url
     when not matched then insert
-    (page_url, result, title, content, last_scraped, content_type, image, language)
+    (page_url, result, title, content, last_scraped, content_type, image, language,CLEANED_CONTENT,CLEANED_TITLE)
     values
-    (s.page_url, s.outcome, s.title, s.content, current_date, s.content_type, s.image, s.language)
+    (s.page_url, s.outcome, s.title, s.content, current_date, s.content_type, s.image, s.language,s.CLEANED_CONTENT,s.CLEANED_TITLE)
     when matched then update set
     title = s.title,
     result = s.outcome,
@@ -170,7 +172,9 @@ scraper_results_merge_query = [f"""
     last_scraped = current_date,
     content_type = s.content_type,
     image = s.image,
-    language = s.language;
+    language = s.language,
+    CLEANED_CONTENT=s.CLEANED_CONTENT,
+    CLEANED_TITLE=s.CLEANED_TITLE;
 """]
 
 prune_upload_scraper_input_cache_query = [f"""
