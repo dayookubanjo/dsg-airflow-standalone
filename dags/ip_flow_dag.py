@@ -273,7 +273,7 @@ score_totals as (
 select distinct
     a.ip,
     normalized_company_domain,
-    greatest(0.1,score/score_total) as score
+    greatest(0.1, (CASE WHEN score_total=0 THEN 0 ELSE score/score_total END) ) as score
 from map_scores a
 join score_totals b
 on a.ip = b.ip;"""
