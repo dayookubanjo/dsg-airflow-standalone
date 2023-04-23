@@ -66,7 +66,7 @@ USING
  from {FIVE_BY_FIVE_TABLE} t,
  lateral split_to_table(t.company_domain_array,',') f
  where normalized_company_domain is not null and normalized_company_domain!='Shared' and len(normalized_company_domain)>1)
- )  
+   
   SELECT distinct
     ip,
     normalized_company_domain,
