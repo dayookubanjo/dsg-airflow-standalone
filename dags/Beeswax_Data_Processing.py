@@ -687,7 +687,15 @@ s.unique_ips
 
 delete_from_company_activity_cache_query = [f"""
 delete from {BIDSTREAM_DATABASE}.activity.company_activity_cache a
-using {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache b
+using (select distinct 
+        page_url,
+        normalized_company_domain,
+        date,
+        normalized_country_code,
+        normalized_region_code,
+        normalized_city_name,
+        normalized_zip 
+        from {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache) b
 where a.page_url=b.page_url
 and a.NORMALIZED_COMPANY_DOMAIN=b.NORMALIZED_COMPANY_DOMAIN
 and a.date=b.date
