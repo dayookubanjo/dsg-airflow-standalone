@@ -552,15 +552,28 @@ where date in (select distinct date from {BIDSTREAM_DATABASE}.activity.company_a
 # --- PRESCORING ---- #
 enriched_company_activity_cache_query = [f"""
 create or replace transient table {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache as
+with flattened_topics as (
+select distinct
+  t.page_url,
+  f.value:"parentCategory"::varchar as parent_category,
+  f.value:"category"::varchar as category,
+  f.value:"topic"::varchar as topic,
+  f.value:"probability"::varchar as probability
+from {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" t,
+lateral flatten(input=>intent_topics) f
+)
 select activity.*,
-        taxo.intent_topics,
+        parent_category,
+        category,
+        topic,
+        probability,
         context.context as context_output,
         title.topics as title_output,
         title.url_type,
         title.activity_type,
         title.information_type
     from {BIDSTREAM_DATABASE}.activity.company_activity_cache activity
-    join {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
+    join flattened_topics taxo
     on activity.page_url = taxo.page_url
     join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
     on activity.page_url = context.page_url
@@ -571,22 +584,21 @@ select activity.*,
 prescoring_cache_query = [f"""
 merge into {BIDSTREAM_DATABASE}.activity.prescoring_cache t
 using (
-  -- flatten enriched_company_activity_cache
   select
         -- rollup cols
-        t.normalized_company_domain,
-        f.value:"parentCategory"::varchar as parent_category,
-        f.value:"category"::varchar as category,
-        f.value:"topic"::varchar as topic,
-        t.normalized_country_code,
-        t.normalized_region_code,
-        t.normalized_city_name,
-        t.normalized_zip,
-        t.date,
+        normalized_company_domain,
+        parent_category,
+        category,
+        topic,
+        normalized_country_code,
+        normalized_region_code,
+        normalized_city_name,
+        normalized_zip,
+        date,
         -- feature cols
-        sum(t.pageviews) as pageviews,
-        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
-        avg(greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
+        sum(pageviews) as pageviews,
+        sum(probability*weighted_pageviews*greatest(title_output:"BUSINESS", title_output:"BUSINESS NEWS", title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
+        avg(greatest(title_output:"BUSINESS", title_output:"BUSINESS NEWS", title_output:"SCIENCE TECH NEWS")) as avg_page_relevance,
         avg(case activity_type
               when 'downloading' then 100
               when 'reading' then 85
@@ -599,15 +611,14 @@ using (
               when 'transactional' then 75
               when 'navigational' then 25
               else 5 end) as information_type_score,
-        sum(t.context_output:"review/comparison") as review_pageviews,
-        count(distinct t.page_url) as unique_pages,
-        count(distinct t.publisher_domain_normalized) as unique_pubs,
-        sum(t.unique_devices) as unique_devices,
-        sum(t.unique_ips) as unique_ips
+        sum(context_output:"review/comparison") as review_pageviews,
+        count(distinct page_url) as unique_pages,
+        count(distinct publisher_domain_normalized) as unique_pubs,
+        sum(unique_devices) as unique_devices,
+        sum(unique_ips) as unique_ips
         -- table definition
-        from {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache t,
-        lateral flatten(input=>t.intent_topics) f
-        group by 1,2,3,4,5,6,7,8,9
+        from {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache
+        group by 1,2,3,4,5,6,7,8,9;
 ) s
 on t.parent_category = s.category
 and t.category = s.category
