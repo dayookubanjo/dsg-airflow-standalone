@@ -618,7 +618,7 @@ using (
         sum(unique_ips) as unique_ips
         -- table definition
         from {BIDSTREAM_DATABASE}.activity.enriched_company_activity_cache
-        group by 1,2,3,4,5,6,7,8,9;
+        group by 1,2,3,4,5,6,7,8,9
 ) s
 on t.parent_category = s.category
 and t.category = s.category
