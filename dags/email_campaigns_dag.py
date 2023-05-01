@@ -273,7 +273,7 @@ with dag:
     )
 
     #--- DAG FLOW ----#
-    clicks_load_exec >> company_clicks_exec
+    clicks_load_exec >> [company_clicks_exec, campaign_content_exec, unique_urls_exec]
     opens_load_exec >> company_opens_exec
     [company_clicks_exec, company_opens_exec, campaign_topics_exec] >> prescoring_exec
     campaign_content_exec >> campaign_topics_exec
