@@ -50,6 +50,16 @@ dag = DAG(DAG_NAME, start_date = datetime(2022, 12, 7), schedule_interval = '@da
         default_args={'depends_on_past' : False,'retries' : 0,'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
 #---- SNOWFLAKE QUERIES ----#
+load_clicks_query = [f"""
+copy into {EMAIL_CAMPAIGNS_DATABASE}."RAW_DATA"."CLICKS"
+from @{EMAIL_CAMPAIGNS_DATABASE}."RAW_DATA"."CLICKS";
+"""]
+
+load_opens_query = [f"""
+copy into {EMAIL_CAMPAIGNS_DATABASE}."RAW_DATA"."OPENS"
+from @{EMAIL_CAMPAIGNS_DATABASE}."RAW_DATA"."OPENS";
+"""]
+
 company_clicks_query = [f"""
 create or replace table {EMAIL_CAMPAIGNS_DATABASE}.activity.company_clicks as
 select
@@ -58,7 +68,7 @@ select
     date(time) as date,
     split_part(link,'?email',1) as page_url, --index is 1-based
     count(*) as frequency
-from  {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.CLICKS
+from  (select distinct * from {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.CLICKS)
 where cam_id is not null
 and normalized_company_domain is not null
 and date is not null
@@ -73,7 +83,7 @@ select
     {DATAMART_DATABASE}.public.domain_normalizer(domain) as normalized_company_domain,
     date(time) as date,
     count(*) as frequency
-from  {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.OPENS
+from  (select distinct * from {EMAIL_CAMPAIGNS_DATABASE}.RAW_DATA.OPENS)
 where cam_id is not null
 and normalized_company_domain is not null
 and date is not null
@@ -197,6 +207,19 @@ and c.topic = o.topic;
 """]
 
 with dag:
+    # --- load steps --- #
+    clicks_load_exec = SnowflakeOperator(
+    task_id= "load_clicks",
+    sql=load_clicks_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
+    opens_load_exec = SnowflakeOperator(
+    task_id= "load_opens",
+    sql=load_opens_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+
     # --- activity steps --- #
     company_clicks_exec = SnowflakeOperator(
     task_id= "company_clicks",
@@ -250,6 +273,8 @@ with dag:
     )
 
     #--- DAG FLOW ----#
+    clicks_load_exec >> company_clicks_exec
+    opens_load_exec >> company_opens_exec
     [company_clicks_exec, company_opens_exec, campaign_topics_exec] >> prescoring_exec
     campaign_content_exec >> campaign_topics_exec
     unique_urls_exec >> web_scraper_input_exec
