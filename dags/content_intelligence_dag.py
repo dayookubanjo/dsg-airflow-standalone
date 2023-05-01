@@ -143,8 +143,8 @@ scraper_out_query = [f"""
     purge = True;
 """]
 
-scraper_results_merge_query = [f"""
-    merge into {AIML_DATABASE}.WEB_SCRAPER.RESULTS t
+scraper_results_cache_merge_query = [f"""
+    merge into {AIML_DATABASE}.WEB_SCRAPER.RESULTS_CACHE t
     using (
         select
             result:url::varchar as page_url,
@@ -177,6 +177,30 @@ scraper_results_merge_query = [f"""
     CLEANED_TITLE=s.CLEANED_TITLE;
 """]
 
+scraper_results_merge_query = [f"""
+    merge into {AIML_DATABASE}.WEB_SCRAPER.RESULTS t
+    using (
+        select
+            *
+        from {AIML_DATABASE}.WEB_SCRAPER.RESULTS_CACHE
+    ) s
+    on s.page_url = t.page_url
+    when not matched then insert
+    (page_url, result, title, content, last_scraped, content_type, image, language,CLEANED_CONTENT,CLEANED_TITLE)
+    values
+    (s.page_url, s.result, s.title, s.content, s.last_scraped, s.content_type, s.image, s.language,s.CLEANED_CONTENT,CLEANED_TITLE)
+    when matched then update set
+    title = s.title,
+    result = s.result,
+    content = s.content,
+    last_scraped = s.last_scraped,
+    content_type = s.content_type,
+    image = s.image,
+    language = s.language,
+    CLEANED_CONTENT=s.CLEANED_CONTENT,
+    CLEANED_TITLE=s.CLEANED_TITLE;
+"""]
+
 prune_upload_scraper_input_cache_query = [f"""
  delete from {AIML_DATABASE}.web_scraper.input_cache
  where page_url in (select distinct result:url::varchar from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE)
@@ -188,6 +212,13 @@ prune_upload_scraper_input_cache_query = [f"""
 
 clear_scraper_cache_query = [f"""
   truncate table {AIML_DATABASE}.web_scraper.output_cache;
+"""]
+
+clear_scraper_results_cache = [f"""
+DELETE FROM {AIML_DATABASE}.WEB_SCRAPER.RESULTS_CACHE
+WHERE page_url IN (
+    SELECT page_url FROM {AIML_DATABASE}.WEB_SCRAPER.RESULTS
+);
 """]
 
 #----TITLE MODEL ------
@@ -367,13 +398,20 @@ with dag:
     retries=3
     )
   
-  #merge output cache into cumulative results table
+  #merge output cache into cache results table
+  scraper_results_cache_merge_exec = SnowflakeOperator(
+    task_id= "merge_into_scraper_results_cache",
+    sql= scraper_results_cache_merge_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION, #replace with transform connection
+    )
+    
+  #merge results cache into results table
   scraper_results_merge_exec = SnowflakeOperator(
     task_id= "merge_into_scraper_results",
     sql= scraper_results_merge_query,
     snowflake_conn_id= TRANSFORM_CONNECTION, #replace with transform connection
     )
-
+    
   #delete urls from scraper input cache present in scraper output cache
   prune_upload_scraper_input_cache_exec = SnowflakeOperator(
     task_id= "prune_upload_scraper_input_cache",
@@ -391,6 +429,13 @@ with dag:
   clear_scraper_output_cache_exec = SnowflakeOperator(
     task_id= "clear_scraper_output_cache",
     sql= clear_scraper_cache_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION, #replace with transform connection
+    )
+    
+  #clear the scraper results cache 
+  clear_scraper_results_cache_exec = SnowflakeOperator(
+    task_id= "clear_scraper_results_cache",
+    sql= clear_scraper_results_cache,
     snowflake_conn_id= TRANSFORM_CONNECTION, #replace with transform connection
     )
 
@@ -518,13 +563,14 @@ with dag:
   #context model chain
   scraper_out_exec >> label_context_exec
   #---Cache to cumulative---
-  scraper_out_exec >> scraper_results_merge_exec
+  scraper_out_exec >> scraper_results_cache_merge_exec >> scraper_results_merge_exec
   title_out_exec >> title_cache_to_cumulative_exec
   content_out_exec >> content_cache_to_cumulative_exec
 
   #--Cache deletions---
-  [scraper_results_merge_exec, prune_upload_scraper_input_cache_exec, 
+  [scraper_results_cache_merge_exec,scraper_results_merge_exec,prune_upload_scraper_input_cache_exec, 
   title_model_input_cache_exec, content_model_input_cache_exec, label_context_exec] >> clear_scraper_output_cache_exec
+  clear_scraper_output_cache_exec >> clear_scraper_results_cache_exec
   [title_cache_to_cumulative_exec, prune_title_model_input_cache_exec] >> clear_title_model_output_cache_exec
   [content_cache_to_cumulative_exec, prune_content_model_input_cache_exec] >> clear_content_model_output_cache_exec
 
