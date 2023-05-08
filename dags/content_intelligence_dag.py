@@ -221,6 +221,171 @@ WHERE page_url IN (
 );
 """]
 
+#----TAGGING_BRANDS-----
+generating_ngarms_query = [f"""merge into {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS a 
+using(select distinct 
+  page_url, 
+  {AIML_DATABASE}.brands_identification.unique_ngrams(cleaned_title || ' ' || cleaned_content) as ngrams
+from (select * from {AIML_DATABASE}.WEB_SCRAPER.RESULTS_CACHE where result != 'null' and result is not null  
+    and result = '200'
+    having len(cleaned_content)>1)) b
+on a.page_url=b.page_url
+when matched then update set
+a.ngrams=b.ngrams
+when not matched then
+insert (page_url,ngrams)
+values (b.page_url,b.ngrams)
+""",
+f"""create or replace table {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS_W_CATEGORIES as
+select distinct 
+  t.page_url, 
+  t.ngrams,
+  f.value:parentCategory::varchar as parent_category,
+  f.value:category::varchar as category,
+  f.value:topic::varchar as topic
+from 
+    (select a.page_url,
+            ngrams,
+            b.intent_topics
+     from  {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS a
+     join {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT b
+     on a.page_url = b.page_url ) t,
+lateral flatten(input=>t.intent_topics) f;
+"""]
+
+tagging_brands_ngrams_query = [f"""
+create or replace table {AIML_DATABASE}.brands_identification.tagged_brands as
+select distinct
+    page_url,
+    ngrams,
+    a.parent_category,
+    a.category,
+    a.topic,
+    {AIML_DATABASE}.brands_identification.arrays_intersect(brands, ngrams) as brand_intersection,
+    {AIML_DATABASE}.brands_identification.arrays_intersect(domains, ngrams) as domain_intersection
+from {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS_W_CATEGORIES a
+join {AIML_DATABASE}.brands_identification.CATEGORY_TOPICS_BRANDS b
+on a.parent_category = b.parent_category and a.category = b.category and a.topic=b.original_topic
+where array_size(brand_intersection) > 0
+or array_size(domain_intersection) > 0
+""",
+f"""
+MERGE INTO {AIML_DATABASE}.BRANDS_IDENTIFICATION.OUTPUT AS target
+using (
+SELECT DISTINCT
+  a.page_url,
+  a.ngrams,
+  ARRAY_AGG(DISTINCT e.VALUE) AS brand_topics
+FROM (
+  SELECT DISTINCT
+    page_url,
+    ngrams,
+    parent_category,
+    category,
+    topic,
+    IFF(array_size(BRAND_INTERSECTION) > 0, LOWER(REGEXP_REPLACE(f.VALUE, '^"|"$', '')), NULL) AS brand_intersection,
+    IFF(array_size(DOMAIN_INTERSECTION) > 0, LOWER(REGEXP_REPLACE(t.VALUE, '^"|"$', '')), NULL) AS domain_intersection
+  FROM
+    {AIML_DATABASE}.BRANDS_IDENTIFICATION.TAGGED_BRANDS,
+    LATERAL FLATTEN(input => BRAND_INTERSECTION, OUTER => TRUE) f,
+    LATERAL FLATTEN(input => DOMAIN_INTERSECTION, OUTER => TRUE) t
+) a
+INNER JOIN {AIML_DATABASE}.BRANDS_IDENTIFICATION.REFERENCE_TOPICS b
+  ON a.PARENT_CATEGORY = b.PARENT_CATEGORY
+  AND a.CATEGORY = b.CATEGORY
+  AND a.TOPIC = b.ORIGINAL_TOPIC
+  AND LOWER(a.brand_intersection) = LOWER(b.BRAND)
+  AND (
+    a.brand_intersection IS NOT NULL
+    OR
+    a.domain_intersection = b.DOMAIN
+  ),
+  LATERAL FLATTEN(input => b.brand_topics) e
+GROUP BY 1,2
+) AS source
+on target.page_url = source.page_url
+and target.ngrams = source.ngrams
+WHEN MATCHED THEN
+UPDATE SET target.brand_topics = ARRAY_DISTINCT(ARRAY_CAT(target.brand_topics, source.brand_topics)),
+target.date_classified=current_date
+WHEN NOT MATCHED THEN
+INSERT (page_url,ngrams,brand_topics,DATE_CLASSIFIED)
+VALUES (source.page_url,source.ngrams,source.brand_topics,current_date)
+""",
+f"""
+create or replace table {AIML_DATABASE}.BRANDS_IDENTIFICATION.CONTANUITY_TAGGED_CASE_INSENSITIVE as
+WITH brands_and_domains AS (
+SELECT distinct iff(len(brand)<4, null, brand) as brand, iff(len(domain)<4, null, domain) as  domain, brand_topics
+FROM {AIML_DATABASE}.BRANDS_IDENTIFICATION.CONTANUITY_NOT_MATCHED
+),
+brands_array as 
+(select 1 as indicator, array_agg(brand) as brands from brands_and_domains),
+domains_array as 
+(select 1 as indicator, array_agg(domain) as domains from brands_and_domains)
+select distinct
+    page_url,
+    ngrams,
+    {AIML_DATABASE}.brands_identification.arrays_intersect_case_insensitive(brands, ngrams) as brand_intersection,
+    {AIML_DATABASE}.brands_identification.arrays_intersect_case_insensitive(domains, ngrams) as domain_intersection
+from {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS
+join brands_array b
+on b.indicator = 1
+join domains_array c
+on c.indicator = 1
+where array_size(brand_intersection) > 0
+or array_size(domain_intersection) > 0
+""",
+f"""
+MERGE INTO {AIML_DATABASE}.BRANDS_IDENTIFICATION.OUTPUT AS target
+USING (
+  SELECT DISTINCT
+    a.page_url,
+    a.ngrams,
+    ARRAY_AGG(DISTINCT e.VALUE) AS brand_topics
+  FROM (
+    SELECT DISTINCT
+      page_url,
+      ngrams,
+      IFF(array_size(BRAND_INTERSECTION) > 0, LOWER(REGEXP_REPLACE(f.VALUE, '^"|"$', '')), NULL) AS brand_intersection,
+      IFF(array_size(DOMAIN_INTERSECTION) > 0, LOWER(REGEXP_REPLACE(t.VALUE, '^"|"$', '')), NULL) AS domain_intersection
+    FROM
+      {AIML_DATABASE}.BRANDS_IDENTIFICATION.CONTANUITY_TAGGED_CASE_INSENSITIVE,
+      LATERAL FLATTEN(input => BRAND_INTERSECTION, OUTER => TRUE) f,
+      LATERAL FLATTEN(input => DOMAIN_INTERSECTION, OUTER => TRUE) t
+  ) a
+  INNER JOIN {AIML_DATABASE}.BRANDS_IDENTIFICATION.REFERENCE_TOPICS b
+    ON LOWER(a.brand_intersection) = LOWER(b.BRAND)
+    AND (
+      a.brand_intersection IS NOT NULL
+      OR
+      a.domain_intersection = b.DOMAIN
+    ),
+    LATERAL FLATTEN(input => b.brand_topics) e
+  GROUP BY 1,2
+) AS source
+ON target.page_url = source.page_url
+and target.ngrams = source.ngrams
+WHEN MATCHED THEN
+UPDATE SET target.brand_topics = ARRAY_DISTINCT(ARRAY_CAT(target.brand_topics, source.brand_topics)),
+target.date_classified=current_date
+WHEN NOT MATCHED THEN
+INSERT (page_url,ngrams,brand_topics,DATE_CLASSIFIED)
+VALUES (source.page_url,source.ngrams,source.brand_topics,current_date);
+"""]
+
+cleaning_brands_identification_query = [f"""
+truncate table {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS_W_CATEGORIES
+""",
+f"""truncate table {AIML_DATABASE}.brands_identification.tagged_brands
+""",
+f"""truncate table {AIML_DATABASE}.BRANDS_IDENTIFICATION.CONTANUITY_TAGGED_CASE_INSENSITIVE
+""",
+f"""delete from  {AIML_DATABASE}.BRANDS_IDENTIFICATION.URL_NGRAMS
+WHERE page_url IN (
+    SELECT page_url FROM {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT
+) or array_size(ngrams)=0;
+"""]
+                               
 #----TITLE MODEL ------
 title_model_input_cache_query = [f"""
   merge into {AIML_DATABASE}.TITLE_CLASSIFIER.INPUT_CACHE t
@@ -438,7 +603,29 @@ with dag:
     sql= clear_scraper_results_cache,
     snowflake_conn_id= TRANSFORM_CONNECTION, #replace with transform connection
     )
-
+    
+  #-----BRANDS IDENTIFICATION-----
+  #generating ngrams from the scraper results_cache
+  generating_ngarms_exec = SnowflakeOperator(
+    task_id= "generating_ngarms_from_scraper_results_cache",
+    sql= generating_ngarms_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+    
+  #tagging brands to ngrams and merging them to output
+  tagging_brands_to_page_url_ngrams_exec = SnowflakeOperator(
+    task_id= "tagging_brands_to_page_url_ngrams",
+    sql= tagging_brands_ngrams_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+    
+  #cleaning the brands_identification tables
+  cleaning_brands_identification_exec = SnowflakeOperator(
+    task_id= "cleaning_brands_identification",
+    sql= cleaning_brands_identification_query,
+    snowflake_conn_id= TRANSFORM_CONNECTION,
+    )
+  
   #-------TITLE MODEL -------
   #load from title model output cache
   title_out_exec = SnowflakeOperator(
@@ -556,6 +743,8 @@ with dag:
   #--MAIN FLOW ---
   #scraper out to start
   scraper_out_exec >> prune_upload_scraper_input_cache_exec >> scraper_start_exec
+  #brands identification chain 
+  scraper_results_cache_merge_exec >> generating_ngarms_exec >> tagging_brands_to_page_url_ngrams_exec
   #title model chain
   scraper_out_exec >> title_out_exec >> title_model_input_cache_exec >> prune_title_model_input_cache_exec >> title_model_conditional_start_exec
   #content model chain
@@ -570,11 +759,12 @@ with dag:
   #--Cache deletions---
   [scraper_results_cache_merge_exec,scraper_results_merge_exec,prune_upload_scraper_input_cache_exec, 
   title_model_input_cache_exec, content_model_input_cache_exec, label_context_exec] >> clear_scraper_output_cache_exec
-  clear_scraper_output_cache_exec >> clear_scraper_results_cache_exec
+  [clear_scraper_output_cache_exec,generating_ngarms_exec] >> clear_scraper_results_cache_exec
   [title_cache_to_cumulative_exec, prune_title_model_input_cache_exec] >> clear_title_model_output_cache_exec
   [content_cache_to_cumulative_exec, prune_content_model_input_cache_exec] >> clear_content_model_output_cache_exec
+  [generating_ngarms_exec,tagging_brands_to_page_url_ngrams_exec] >> cleaning_brands_identification_exec
 
   #--Success Condition---
   [scraper_start_exec, title_model_conditional_start_exec, content_model_conditional_start_exec,
-  clear_scraper_output_cache_exec, clear_title_model_output_cache_exec, clear_content_model_output_cache_exec] >> end_success_exec
+  clear_scraper_output_cache_exec, clear_title_model_output_cache_exec, clear_content_model_output_cache_exec,tagging_brands_to_page_url_ngrams_exec] >> end_success_exec
 
