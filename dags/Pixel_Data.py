@@ -220,21 +220,61 @@ values(S.PAGE_URL,S.PUBLISHER_DOMAIN_NORMALIZED,S.NORMALIZED_COMPANY_DOMAIN,S.DA
 enriched_company_activity_cache = [f"""
 -- create table that will be used to merge into the prescoring cache and delete from the company activity cache
 create or replace transient table {PIXEL_DATABASE}.activity.enriched_company_activity_cache as
+with flattened_topics as (
+select distinct
+  t.page_url,
+  f.value:"parentCategory"::varchar as parent_category,
+  f.value:"category"::varchar as category,
+  f.value:"topic"::varchar as topic,
+  f.value:"probability"::varchar as probability
+from {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" t,
+lateral flatten(input=>intent_topics) f
+),
+flattened_brands as (
+select distinct
+  t.page_url,
+  f.value:"parentCategory"::varchar as parent_category,
+  f.value:"category"::varchar as category,
+  f.value:"topic"::varchar as topic,
+  f.value:"probability"::varchar as probability
+from {AIML_DATABASE}."BRANDS_IDENTIFICATION"."OUTPUT" t,
+lateral flatten(input=>brand_topics) f
+)
 select activity.*,
-        taxo.intent_topics,
+        parent_category,
+        category,
+        topic,
+        probability,
         context.context as context_output,
         title.topics as title_output,
         title.url_type,
         title.activity_type,
         title.information_type
     from {PIXEL_DATABASE}.activity.company_activity_cache activity
-    join {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" taxo
+    join flattened_topics taxo
     on activity.page_url = taxo.page_url
     join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
     on activity.page_url = context.page_url
     join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
+    on activity.page_url = title.page_url
+union 
+select activity.*,
+        parent_category,
+        category,
+        topic,
+        probability,
+        context.context as context_output,
+        title.topics as title_output,
+        title.url_type,
+        title.activity_type,
+        title.information_type
+    from {PIXEL_DATABASE}.activity.company_activity_cache activity
+    join flattened_brands brands
+    on activity.page_url = brands.page_url
+    join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
+    on activity.page_url = context.page_url
+    join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
     on activity.page_url = title.page_url;
-
 """]
 
 merge_insert_prescoring_cache=[f"""merge into {PIXEL_DATABASE}.activity.prescoring_cache t
@@ -242,29 +282,28 @@ using (
   -- flatten enriched_company_activity_cache
   select
         -- rollup cols
-        t.normalized_company_domain,
-        f.value:"parentCategory"::varchar as parent_category,
-        f.value:"category"::varchar as category,
-        f.value:"topic"::varchar as topic,
-        t.normalized_country_code,
-        t.normalized_region_code,
-        t.normalized_city_name,
-        t.normalized_zip,
-        t.date,
+        normalized_company_domain,
+        parent_category,
+        category,
+        topic,
+        normalized_country_code,
+        normalized_region_code,
+        normalized_city_name,
+        normalized_zip,
+        date,
         -- feature cols
-        sum(t.pageviews) as pageviews,
-        sum(f.value:"probability"*t.weighted_pageviews*greatest(t.title_output:"BUSINESS", t.title_output:"BUSINESS NEWS", t.title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
+        sum(pageviews) as pageviews,
+        sum(probability*weighted_pageviews*greatest(title_output:"BUSINESS",title_output:"BUSINESS NEWS",title_output:"SCIENCE TECH NEWS")) as weighted_pageviews,
         1.0 as avg_page_relevance,
         100 as activity_type_score,
         100 as information_type_score,
-        sum(t.context_output:"review/comparison") as review_pageviews,
-        count(distinct t.page_url) as unique_pages,
-        count(distinct t.publisher_domain_normalized) as unique_pubs,
-        sum(t.unique_devices) as unique_devices,
-        sum(t.unique_ips) as unique_ips
+        sum(context_output:"review/comparison") as review_pageviews,
+        count(distinct page_url) as unique_pages,
+        count(distinct publisher_domain_normalized) as unique_pubs,
+        sum(unique_devices) as unique_devices,
+        sum(unique_ips) as unique_ips
         -- table definition
-        from {PIXEL_DATABASE}.activity.enriched_company_activity_cache t,
-        lateral flatten(input=>t.intent_topics) f
+        from {PIXEL_DATABASE}.activity.enriched_company_activity_cache
         group by 1,2,3,4,5,6,7,8,9
 ) s
 on t.parent_category = s.category
