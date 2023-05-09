@@ -561,6 +561,16 @@ select distinct
   f.value:"probability"::varchar as probability
 from {AIML_DATABASE}."TAXONOMY_CLASSIFIER"."OUTPUT" t,
 lateral flatten(input=>intent_topics) f
+),
+flattened_brands as (
+select distinct
+  t.page_url,
+  f.value:"parentCategory"::varchar as parent_category,
+  f.value:"category"::varchar as category,
+  f.value:"topic"::varchar as topic,
+  f.value:"probability"::varchar as probability
+from {AIML_DATABASE}."BRANDS_IDENTIFICATION"."OUTPUT" t,
+lateral flatten(input=>brand_topics) f
 )
 select activity.*,
         parent_category,
@@ -575,6 +585,24 @@ select activity.*,
     from {BIDSTREAM_DATABASE}.activity.company_activity_cache activity
     join flattened_topics taxo
     on activity.page_url = taxo.page_url
+    join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
+    on activity.page_url = context.page_url
+    join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
+    on activity.page_url = title.page_url
+union 
+select activity.*,
+        parent_category,
+        category,
+        topic,
+        probability,
+        context.context as context_output,
+        title.topics as title_output,
+        title.url_type,
+        title.activity_type,
+        title.information_type
+    from {BIDSTREAM_DATABASE}.activity.company_activity_cache activity
+    join flattened_brands brands
+    on activity.page_url = brands.page_url
     join {AIML_DATABASE}."CONTEXT_CLASSIFIER"."OUTPUT" context
     on activity.page_url = context.page_url
     join {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT" title
