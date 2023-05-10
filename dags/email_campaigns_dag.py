@@ -161,7 +161,21 @@ date_inserted = current_date;
 
 prescoring_query = [f"""
 create or replace table {EMAIL_CAMPAIGNS_DATABASE}.activity.prescoring as
-with joined_clicks as (
+with joined_clicks_brands as (
+select
+    t.normalized_company_domain,
+    t.date,
+    f.value:parentCategory::varchar as parent_category,
+    f.value:category::varchar as category,
+    f.value:topic::varchar as topic,
+    sum(t.frequency * f.value:probability::number(5,4)) as weighted_clicks
+from (select a.normalized_company_domain, a.date, a.frequency, b.brand_topics 
+      from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.COMPANY_CLICKS a
+     join {AIML_DATABASE}.BRANDS_IDENTIFICATION.OUTPUT b
+     on a.page_url = b.page_url) t,
+lateral flatten(input => t.brand_topics) f
+group by 1,2,3,4,5),
+joined_clicks_taxo as (
 select
     t.normalized_company_domain,
     t.date,
@@ -175,7 +189,6 @@ from (select a.normalized_company_domain, a.date, a.frequency, b.intent_topics
      on a.page_url = b.page_url) t,
 lateral flatten(input => t.intent_topics) f
 group by 1,2,3,4,5),
-
 joined_opens as (
 select
     a.normalized_company_domain,
@@ -188,7 +201,6 @@ from {EMAIL_CAMPAIGNS_DATABASE}.ACTIVITY.COMPANY_OPENS a
 join {EMAIL_CAMPAIGNS_DATABASE}.CONTENT.CAMPAIGN_TOPICS b
 on a.cam_id = b.cam_id
 group by 1,2,3,4,5)
-
 select
     coalesce(c.normalized_company_domain, o.normalized_company_domain) as normalized_company_domain,
     coalesce(c.date, o.date) as date,
@@ -197,13 +209,29 @@ select
     coalesce(c.topic, o.topic) as topic,
     ifnull(weighted_opens, 0) as weighted_opens,
     ifnull(weighted_clicks, 0) as weighted_clicks
-from joined_clicks c
+from joined_clicks_brands c
 full outer join joined_opens o
 on c.normalized_company_domain = o.normalized_company_domain
 and c.date = o.date
 and c.parent_category = o.parent_category
 and c.category = o.category
-and c.topic = o.topic;
+and c.topic = o.topic
+union
+select
+    coalesce(c.normalized_company_domain, o.normalized_company_domain) as normalized_company_domain,
+    coalesce(c.date, o.date) as date,
+    coalesce(c.parent_category, o.parent_category) as parent_category,
+    coalesce(c.category, o.category) as category,
+    coalesce(c.topic, o.topic) as topic,
+    ifnull(weighted_opens, 0) as weighted_opens,
+    ifnull(weighted_clicks, 0) as weighted_clicks
+from joined_clicks_taxo c
+full outer join joined_opens o
+on c.normalized_company_domain = o.normalized_company_domain
+and c.date = o.date
+and c.parent_category = o.parent_category
+and c.category = o.category
+and c.topic = o.topic;;
 """]
 
 with dag:
