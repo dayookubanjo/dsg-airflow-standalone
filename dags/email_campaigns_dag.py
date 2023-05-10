@@ -231,7 +231,7 @@ on c.normalized_company_domain = o.normalized_company_domain
 and c.date = o.date
 and c.parent_category = o.parent_category
 and c.category = o.category
-and c.topic = o.topic;;
+and c.topic = o.topic;
 """]
 
 with dag:
