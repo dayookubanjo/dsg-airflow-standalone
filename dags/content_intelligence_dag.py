@@ -759,7 +759,7 @@ with dag:
   #--Cache deletions---
   [scraper_results_cache_merge_exec,scraper_results_merge_exec,prune_upload_scraper_input_cache_exec, 
   title_model_input_cache_exec, content_model_input_cache_exec, label_context_exec] >> clear_scraper_output_cache_exec
-  [clear_scraper_output_cache_exec,generating_ngarms_exec] >> clear_scraper_results_cache_exec
+  generating_ngarms_exec >> clear_scraper_results_cache_exec
   [title_cache_to_cumulative_exec, prune_title_model_input_cache_exec] >> clear_title_model_output_cache_exec
   [content_cache_to_cumulative_exec, prune_content_model_input_cache_exec] >> clear_content_model_output_cache_exec
   [generating_ngarms_exec,tagging_brands_to_page_url_ngrams_exec] >> cleaning_brands_identification_exec
