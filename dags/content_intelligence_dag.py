@@ -64,7 +64,7 @@ def on_success_callback(context):
     )
     op.execute(context)
 
-dag = DAG(DAG_NAME, start_date = datetime(2022, 10, 29), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
+dag = DAG(DAG_NAME, start_date = datetime(2022, 10, 29), schedule_interval = '@hourly', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
 #-----Python Functions-----
@@ -206,8 +206,22 @@ prune_upload_scraper_input_cache_query = [f"""
  where page_url in (select distinct result:url::varchar from {AIML_DATABASE}.WEB_SCRAPER.OUTPUT_CACHE)
  """,
  f"""
+ create or replace transient table {AIML_DATABASE}.WEB_SCRAPER.UPLOAD_INCREMENT as
+ select distinct page_url from (select * from {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE
+ where date_pushed is null
+ order by date_inserted asc)
+ limit 2000000;
+ """,
+ f"""
  copy into @{AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE/{date_time} from 
- (select distinct page_url from {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE limit 2000000);
+ {AIML_DATABASE}.WEB_SCRAPER.UPLOAD_INCREMENT;
+ """,
+ f"""
+ merge into {AIML_DATABASE}.WEB_SCRAPER.INPUT_CACHE t
+ using {AIML_DATABASE}.WEB_SCRAPER.UPLOAD_INCREMENT s
+ on t.page_url = s.page_url
+ when matched then update set
+ t.date_pushed = current_date;
  """]
 
 clear_scraper_cache_query = [f"""
