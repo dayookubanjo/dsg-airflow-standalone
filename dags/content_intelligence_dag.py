@@ -64,7 +64,7 @@ def on_success_callback(context):
     )
     op.execute(context)
 
-dag = DAG(DAG_NAME, start_date = datetime(2022, 10, 29), schedule_interval = '@hourly', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
+dag = DAG(DAG_NAME, start_date = datetime(2022, 10, 29), schedule_interval = '@daily', catchup=False, on_failure_callback=on_failure_callback, on_success_callback=None,
         default_args={'on_failure_callback': on_failure_callback,'on_success_callback': None})
 
 #-----Python Functions-----
