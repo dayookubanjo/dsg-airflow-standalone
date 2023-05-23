@@ -318,9 +318,9 @@ INNER JOIN {AIML_DATABASE}.BRANDS_IDENTIFICATION.REFERENCE_TOPICS b
 GROUP BY 1,2
 ) AS source
 on target.page_url = source.page_url
-and target.ngrams = source.ngrams
 WHEN MATCHED THEN
 UPDATE SET target.brand_topics = ARRAY_DISTINCT(ARRAY_CAT(target.brand_topics, source.brand_topics)),
+target.ngrams = source.ngrams,
 target.date_classified=current_date
 WHEN NOT MATCHED THEN
 INSERT (page_url,ngrams,brand_topics,DATE_CLASSIFIED)
@@ -378,9 +378,9 @@ USING (
   GROUP BY 1,2
 ) AS source
 ON target.page_url = source.page_url
-and target.ngrams = source.ngrams
 WHEN MATCHED THEN
 UPDATE SET target.brand_topics = ARRAY_DISTINCT(ARRAY_CAT(target.brand_topics, source.brand_topics)),
+target.ngrams = source.ngrams,
 target.date_classified=current_date
 WHEN NOT MATCHED THEN
 INSERT (page_url,ngrams,brand_topics,DATE_CLASSIFIED)
