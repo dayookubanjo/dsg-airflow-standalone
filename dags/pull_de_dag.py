@@ -73,7 +73,7 @@ def check_fn(files: List) -> bool:
 # ---- Query definitions ------
 snowflake_ingestion_query = [
     f"""truncate table {DE_DATABASE}.raw_data.de_flat_file;""",
-    f"""copy into {DE_DATABASE}.raw_data.de_flat_file from @{DE_DATABASE}.raw_data.dev_digital_element purge=TRUE;"""
+    f"""copy into {DE_DATABASE}.raw_data.de_flat_file from @{DE_DATABASE}.raw_data.DE_FLAT_FILE purge=TRUE;"""
     ]
 
 data_cleaning_query = [
