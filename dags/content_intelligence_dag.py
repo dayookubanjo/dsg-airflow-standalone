@@ -429,7 +429,7 @@ title_model_input_cache_query = [f"""
 
 title_out_query = [f"""
   copy into {AIML_DATABASE}."TITLE_CLASSIFIER"."OUTPUT_CACHE"
-  from @{AIML_DATABASE}.title_classifier.prod_output purge=True;
+  from @dev_aiml.title_classifier.prod_output purge=True;
 """]
 
 title_cache_to_cumulative_query = [f"""
@@ -474,7 +474,7 @@ truncate table {AIML_DATABASE}.title_classifier.output_cache;
 #------ CONTENT/TAXONOMY MODEL ------
 content_out_query = [f"""
 copy into {AIML_DATABASE}.TAXONOMY_CLASSIFIER.OUTPUT_CACHE
-from @{AIML_DATABASE}.taxonomy_classifier.prod_output purge = True;
+from @dev_aiml.taxonomy_classifier.prod_output purge = True;
 """]
 
 content_cache_to_cumulative_query = [f"""
