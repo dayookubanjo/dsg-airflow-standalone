@@ -213,7 +213,7 @@ prune_upload_scraper_input_cache_query = [f"""
  limit 2000000;
  """,
  f"""
- copy into dev_aiml.WEB_SCRAPER.INPUT_CACHE from 
+ copy into @dev_aiml.WEB_SCRAPER.INPUT_CACHE/{date_time} from 
  {AIML_DATABASE}.WEB_SCRAPER.UPLOAD_INCREMENT;
  """,
  f"""
