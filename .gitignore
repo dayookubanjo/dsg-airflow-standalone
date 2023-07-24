@@ -5,4 +5,7 @@ dev-airflow-standalone-server.pem
 intent-dev-ec2-key.pem
 intent-staging-ec2-key.pem
 intent-prod-ec2-key.pem
+intent-dev-ec2-key_v2.pem
 .DS_Store
+dbt_venv/
+dbt_venv

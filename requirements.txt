@@ -21,4 +21,5 @@ jsonpath_ng
 pandas
 mypy-boto3-rds
 mypy-boto3-appflow
-awscli
+awscli 
+dbt-snowflake

@@ -65,6 +65,8 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - ./dbt:/opt/airflow/dbt
+    # - ./dbt_venv:/opt/airflow/dbt_venv
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -88,12 +90,12 @@ services:
       retries: 5
     restart: always
     
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/Postgres"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/Postgres"
+    #     awslogs-create-group: "true"
 
   redis:
     image: redis:latest
@@ -106,12 +108,12 @@ services:
       retries: 50
     restart: always
     
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/Redis"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/Redis"
+    #     awslogs-create-group: "true"
 
   airflow-webserver:
     <<: *airflow-common
@@ -129,12 +131,12 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/WebServer"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/WebServer"
+    #     awslogs-create-group: "true"
 
   airflow-scheduler:
     <<: *airflow-common
@@ -150,12 +152,12 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/scheduler"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/scheduler"
+    #     awslogs-create-group: "true"
 
   airflow-worker:
     <<: *airflow-common
@@ -178,12 +180,12 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/Worker"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/Worker"
+    #     awslogs-create-group: "true"
 
   airflow-triggerer:
     <<: *airflow-common
@@ -199,12 +201,12 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/triggerer"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/triggerer"
+    #     awslogs-create-group: "true"
 
   airflow-init:
     <<: *airflow-common
@@ -284,12 +286,12 @@ services:
     volumes:
       - .:/sources
 
-    logging:
-      driver: "awslogs"
-      options:
-        awslogs-region: "us-east-2"
-        awslogs-group: "/airflow/standalone/init"
-        awslogs-create-group: "true"
+    # logging:
+    #   driver: "awslogs"
+    #   options:
+    #     awslogs-region: "us-east-2"
+    #     awslogs-group: "/airflow/standalone/init"
+    #     awslogs-create-group: "true"
 
   airflow-cli:
     <<: *airflow-common
