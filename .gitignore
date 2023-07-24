@@ -9,3 +9,6 @@ intent-dev-ec2-key_v2.pem
 .DS_Store
 dbt_venv/
 dbt_venv
+dbt/dbt_dsg_app/target/
+dbt/dbt_dsg_app/dbt_packages/
+dbt/dbt_dsg_app/logs/
