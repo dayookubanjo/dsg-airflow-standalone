@@ -1,0 +1,13 @@
+dbt_dsg_app:
+  outputs:
+    dev:
+      account: bcb55215.us-east-1
+      database: DEV_QA
+      password: XXXXXXXXXXX
+      role: ACCOUNTADMIN
+      schema: DBT_POC
+      threads: 4
+      type: snowflake
+      user: XXXXXXXXX
+      warehouse: dev_transform
+  target: dev

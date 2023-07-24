@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: stg_ipflow_input_data
+    description: List of IPs to be sent to the API.
+    columns:
+
+      - name: user_ip
+        description: Primary key for the table which must be unique to avoid multiple calls of the same IP.
+        tests:
+          - unique 
+          - not_null
+          
